@@ -356,6 +356,15 @@ button { cursor: pointer; }
 }
 .btns button:hover, .file-btn:hover { background: var(--hover); }
 .btns.end button { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btns.end button.plain { background: var(--bg); color: var(--chrome-ink); border-color: var(--line); }
+.btns.end button.plain:hover { background: var(--hover); }
+.btns.end button.danger { background: var(--mark-remove); color: #fff; border-color: var(--mark-remove); }
+.ask { width: min(420px, calc(100vw - 2 * var(--gutter))); }
+.ask .hint { font-size: 14px; color: var(--chrome-ink); }
+.ask-input { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.ask-input:focus { border-color: var(--accent); outline: none; }
+.st-sync { padding: 0; border: 0; background: none; font-size: inherit; text-align: left; }
+.st-sync:hover { text-decoration: underline; }
 .doc-links { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
 .doc-links a { color: var(--accent); }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }

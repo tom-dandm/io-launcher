@@ -59,7 +59,7 @@
     <span id="stEdited"></span>
     <span id="stWords"></span>
     <span id="stPage"></span>
-    <span id="stSync"></span>
+    <button type="button" id="stSync" class="st-sync"></button>
   </div>
   <div class="zoom" role="group" aria-label="Zoom">
     <button type="button" class="icon-btn" id="zoomOut" aria-label="Zoom out" title="Zoom out (Ctrl+-)">&minus;</button>
@@ -83,11 +83,11 @@
     </label>
 
     <h3>Google Docs</h3>
-    <p class="hint">Io keeps your writing on this computer. When you are online it copies each sheet to its own Google Doc, and Google keeps the version history.</p>
+    <p class="hint">Io keeps your writing on this device. When you are online and signed in, it saves a small compressed copy to your Google Drive, so your other devices (phone, laptop) get the same book, Fix this! tags included. It also copies each sheet to its own Google Doc, where Google keeps the version history.</p>
     <label class="row">OAuth client ID
       <input id="clientId" spellcheck="false" autocomplete="off" placeholder="1234-abc.apps.googleusercontent.com">
     </label>
-    <label class="check"><input type="checkbox" id="autoPush"> Push changes automatically every 2 minutes</label>
+    <label class="check"><input type="checkbox" id="autoPush"> Save to Google automatically (every 2 minutes after a change; Google Docs at most every 15)</label>
     <div class="btns">
       <button type="button" id="connectBtn">Sign in to Google</button>
       <button type="button" id="pushBtn">Push now</button>
@@ -103,7 +103,7 @@
     <h3>Shortcuts</h3>
     <dl class="keys">
       <dt>Ctrl+Alt+1 / Ctrl+Alt+0</dt><dd>Chapter heading / body text</dd>
-      <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this!</dd>
+      <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this! (with nothing selected, tags the word at the cursor)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks</dd>
       <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
@@ -111,6 +111,15 @@
     </dl>
 
     <div class="btns end"><button value="close">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="ask" class="menu ask">
+  <form method="dialog" class="menu-in">
+    <h2 id="askTitle"></h2>
+    <p class="hint" id="askText"></p>
+    <input id="askInput" class="ask-input" spellcheck="false" autocomplete="off" aria-labelledby="askTitle">
+    <div class="btns end"><button value="cancel" id="askCancel" class="plain">Cancel</button><button value="ok" id="askOk">OK</button></div>
   </form>
 </dialog>
 </body>
