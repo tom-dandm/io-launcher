@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Io</title>
+<meta name="description" content="A fast, offline writing app that mirrors to Google Docs.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#f3f2f1">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <button class="icon-btn" id="navToggle" type="button" aria-label="Show or hide chapters" aria-controls="side" title="Chapters">&#9776;</button>
+  <input id="title" class="title" aria-label="Book title" spellcheck="false" autocomplete="off">
+  <div class="tools" id="tools" role="toolbar" aria-label="Formatting">
+    <div class="seg" role="group" aria-label="Text style">
+      <button type="button" data-cmd="body" title="Body text (Ctrl+Alt+0)">Body</button>
+      <button type="button" data-cmd="heading" title="Chapter heading (Ctrl+Alt+1)">Chapter</button>
+    </div>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
+    <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><i>I</i></button>
+    <button type="button" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline"><u>U</u></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="edit" class="mk mk-edit" title="Mark as needs editing (Ctrl+Shift+E)">Edit</button>
+    <button type="button" data-cmd="remove" class="mk mk-remove" title="Mark as to remove (Ctrl+Shift+X)">Remove</button>
+    <button type="button" data-cmd="fix" class="mk mk-fix" title="Tag as Fix this! (Ctrl+Shift+F)">Fix this!</button>
+    <button type="button" data-cmd="clear" title="Clear marks from the selection (Ctrl+\)">Clear</button>
+  </div>
+  <div class="bar-end">
+    <button type="button" class="sync-btn" id="syncBtn" title="Push to Google Docs (Ctrl+S)">Google Doc</button>
+    <button type="button" class="icon-btn" id="menuBtn" aria-label="Settings" title="Settings">&#8943;</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="side" id="side" aria-label="Chapters">
+    <h2 class="side-h">Chapters</h2>
+    <ol class="toc" id="toc"></ol>
+    <h2 class="side-h side-fix">Fix this! <span class="count" id="fixCount">0</span>
+      <button type="button" class="link-btn" id="nextFix">Next</button></h2>
+    <ol class="toc fixes" id="fixes"></ol>
+  </nav>
+  <main class="scroller" id="scroller">
+    <div class="stage" id="stage">
+      <div class="pages" id="pages" aria-hidden="true"></div>
+    </div>
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="tabs" id="tabs" role="tablist" aria-label="Sheets"></div>
+  <button type="button" class="icon-btn add-tab" id="addTab" aria-label="Add a sheet" title="Add a sheet">+</button>
+  <div class="status" id="status" aria-live="polite">
+    <span id="stEdited"></span>
+    <span id="stWords"></span>
+    <span id="stPage"></span>
+    <span id="stSync"></span>
+  </div>
+  <div class="zoom" role="group" aria-label="Zoom">
+    <button type="button" class="icon-btn" id="zoomOut" aria-label="Zoom out" title="Zoom out (Ctrl+-)">&minus;</button>
+    <button type="button" class="zoom-val" id="zoomVal" title="Reset to 100%">100%</button>
+    <button type="button" class="icon-btn" id="zoomIn" aria-label="Zoom in" title="Zoom in (Ctrl+=)">+</button>
+  </div>
+</footer>
+
+<div class="banner" id="banner" hidden></div>
+
+<dialog id="menu" class="menu">
+  <form method="dialog" class="menu-in">
+    <h2>Settings</h2>
+
+    <label class="row">Font
+      <select id="fontSel">
+        <option value="aptos">Aptos</option>
+        <option value="calibri">Calibri</option>
+        <option value="whitney">Whitney (if installed)</option>
+      </select>
+    </label>
+
+    <h3>Google Docs</h3>
+    <p class="hint">Io keeps your writing on this computer. When you are online it copies each sheet to its own Google Doc, and Google keeps the version history.</p>
+    <label class="row">OAuth client ID
+      <input id="clientId" spellcheck="false" autocomplete="off" placeholder="1234-abc.apps.googleusercontent.com">
+    </label>
+    <label class="check"><input type="checkbox" id="autoPush"> Push changes automatically every 2 minutes</label>
+    <div class="btns">
+      <button type="button" id="connectBtn">Sign in to Google</button>
+      <button type="button" id="pushBtn">Push now</button>
+    </div>
+    <ul class="doc-links" id="docLinks"></ul>
+
+    <h3>Backup</h3>
+    <div class="btns">
+      <button type="button" id="backupBtn">Download backup</button>
+      <label class="file-btn">Restore backup<input type="file" id="restoreFile" accept=".json,application/json" hidden></label>
+    </div>
+
+    <h3>Shortcuts</h3>
+    <dl class="keys">
+      <dt>Ctrl+Alt+1 / Ctrl+Alt+0</dt><dd>Chapter heading / body text</dd>
+      <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this!</dd>
+      <dt>Ctrl+\</dt><dd>Clear marks</dd>
+      <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
+      <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
+      <dt>Double-click a sheet tab</dt><dd>Rename it</dd>
+    </dl>
+
+    <div class="btns end"><button value="close">Done</button></div>
+  </form>
+</dialog>
+</body>
+</html>
