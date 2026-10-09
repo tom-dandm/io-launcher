@@ -32,6 +32,7 @@
     <button type="button" data-cmd="clear" title="Clear marks from the selection (Ctrl+\)">Clear</button>
   </div>
   <div class="bar-end">
+    <button type="button" class="sync-btn" id="openBtn" title="Open a Google Doc (Ctrl+O)">Open</button>
     <button type="button" class="sync-btn" id="syncBtn" title="Push to Google Docs (Ctrl+S)">Google Doc</button>
     <button type="button" class="icon-btn" id="menuBtn" aria-label="Settings" title="Settings">&#8943;</button>
   </div>
@@ -46,9 +47,7 @@
     <ol class="toc fixes" id="fixes"></ol>
   </nav>
   <main class="scroller" id="scroller">
-    <div class="stage" id="stage">
-      <div class="pages" id="pages" aria-hidden="true"></div>
-    </div>
+    <div class="stage" id="stage"></div>
   </main>
 </div>
 
@@ -106,11 +105,22 @@
       <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this! (with nothing selected, tags the word at the cursor)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks</dd>
       <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
+      <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
       <dt>Double-click a sheet tab</dt><dd>Rename it</dd>
     </dl>
 
     <div class="btns end"><button value="close">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="open" class="menu open-dlg">
+  <form method="dialog" class="menu-in">
+    <h2>Open a Google Doc</h2>
+    <p class="hint">It opens as a new sheet. Edit it here; Ctrl+S saves it back to the same Doc.</p>
+    <input id="openQ" class="ask-input" type="search" placeholder="Search by name" spellcheck="false" autocomplete="off" aria-label="Search your Google Docs">
+    <ol class="toc open-list" id="openList"></ol>
+    <div class="btns end"><button value="close" class="plain">Close</button></div>
   </form>
 </dialog>
 

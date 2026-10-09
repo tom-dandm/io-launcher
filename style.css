@@ -200,30 +200,12 @@ button { cursor: pointer; }
   width: var(--page-w);
   margin: var(--page-gap) auto;
 }
-.pages { position: absolute; inset: 0; pointer-events: none; }
-.page {
-  position: absolute;
-  left: 0;
-  width: var(--page-w);
-  height: var(--page-h);
-  background: var(--page);
-  box-shadow: var(--page-shadow);
-}
-.page::after {
-  content: attr(data-n);
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--page-margin) / 2 - 8px);
-  text-align: center;
-  font: 10pt var(--font);
-  color: #777;
-}
-
 .editor {
   position: relative;
   padding: var(--page-margin);
   min-height: var(--page-h);
+  background: var(--page);
+  box-shadow: var(--page-shadow);
   outline: none;
   color: var(--page-ink);
   font-family: var(--font);
@@ -367,6 +349,8 @@ button { cursor: pointer; }
 .st-sync:hover { text-decoration: underline; }
 .doc-links { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
 .doc-links a { color: var(--accent); }
+.open-list { max-height: min(420px, 55dvh); overflow-y: auto; margin-top: 10px; }
+.open-list .pg { flex: none; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }
 .keys dt { font-weight: 600; white-space: nowrap; }
 .keys dd { margin: 0; color: var(--muted); }
@@ -397,12 +381,12 @@ button { cursor: pointer; }
 @media print {
   @page { size: A4; margin: 2.54cm; @bottom-center { content: counter(page); font: 10pt Aptos, Calibri, sans-serif; } }
   body { display: block; height: auto; overflow: visible; background: #fff; }
-  .bar, .side, .foot, .pages, .banner { display: none !important; }
+  .bar, .side, .foot, .banner { display: none !important; }
   .shell, .scroller { display: block; overflow: visible; }
   .stage { zoom: 1; width: auto; margin: 0; }
-  .editor { padding: 0; min-height: 0 !important; }
+  .editor { padding: 0; min-height: 0 !important; background: none; box-shadow: none; }
   .editor[hidden] { display: none; }
-  .editor > * { padding-top: 0 !important; orphans: 2; widows: 2; }
+  .editor > * { orphans: 2; widows: 2; }
   .editor.ms > h1:not(:first-child) { break-before: page; }
   .editor font { background: none !important; box-shadow: none !important; }
 }

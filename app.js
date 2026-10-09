@@ -1,12 +1,13 @@
 'use strict';
 
-const PAGE_W = 794, PAGE_H = 1123, GAP = 24, M = 96;
-const PITCH = PAGE_H + GAP, CONTENT_H = PAGE_H - 2 * M;
+const PAGE_W = 794, M = 96;
 const MARKS = { edit: '#1a56db', remove: '#c81e1e', fix: '#8a6d00' };
 const FIX_BG = { red: 1, green: .882, blue: .478 };
 const ZOOMS = [.5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 const DOCS = 'https://docs.googleapis.com/v1/documents';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const SCOPE_DOCS = SCOPE + ' https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.metadata.readonly';
+const GDOC = 'application/vnd.google-apps.document';
 const PUSH_EVERY = 120000;
 const DOCS_EVERY = 15 * 60000;
 const DRIVE = 'https://www.googleapis.com/drive/v3';
@@ -15,7 +16,7 @@ const DATA_NAME = 'Io data.json.gz';
 
 const $ = s => document.querySelector(s);
 const el = {
-  stage: $('#stage'), pages: $('#pages'), scroller: $('#scroller'), shell: $('.shell'),
+  stage: $('#stage'), scroller: $('#scroller'), shell: $('.shell'),
   toc: $('#toc'), fixes: $('#fixes'), fixCount: $('#fixCount'), tabs: $('#tabs'),
   title: $('#title'), tools: $('#tools'), syncBtn: $('#syncBtn'), menu: $('#menu'),
   stEdited: $('#stEdited'), stWords: $('#stWords'), stPage: $('#stPage'), stSync: $('#stSync'),
@@ -60,7 +61,7 @@ function later(name, ms, fn) {
 }
 const idle = fn => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 1));
 
-let book, zoom = 1, layoutInfo = { heads: [], pages: 1, k: 1 };
+let book, zoom = 1, layoutInfo = { heads: [], k: 1 };
 const editors = {};
 const dirty = new Set();
 
@@ -289,69 +290,24 @@ function updateTools() {
 }
 
 function layout() {
-  const ed = curEd(), t = curTab();
+  const ed = curEd();
   if (!ed || ed.hidden) return;
   const er = ed.getBoundingClientRect();
   const k = er.width / PAGE_W;
   if (!k) return;
-  const ms = t.kind === 'ms';
-  const writes = [], heads = [];
-  let oldShift = 0, newShift = 0, bottom = M;
+  const heads = [];
   for (const b of ed.children) {
-    const r = b.getBoundingClientRect();
-    const old = b._push || 0;
-    const top = (r.top - er.top) / k - oldShift + newShift;
-    const h = r.height / k - old;
-    oldShift += old;
-    const p = Math.floor(top / PITCH);
-    const start = p * PITCH + M, end = p * PITCH + PAGE_H - M, next = (p + 1) * PITCH + M;
-    let push = 0;
-    if (top < start - 1) push = start - top;
-    else if (ms && b.nodeName === 'H1' && b !== ed.firstElementChild && top > start + 1) push = next - top;
-    else if (top + h > end + .5 && h <= CONTENT_H && top > start + 1) push = next - top;
-    push = Math.round(push * 100) / 100;
-    if (Math.abs(push - old) > .5) writes.push([b, push]);
-    else push = old;
-    newShift += push;
-    const y = top + push;
-    if (b.nodeName === 'H1') heads.push({ el: b, y, page: Math.floor(y / PITCH) + 1, text: b.textContent.trim() || 'Untitled' });
-    bottom = y + h;
+    if (b.nodeName === 'H1') heads.push({ el: b, y: (b.getBoundingClientRect().top - er.top) / k, text: b.textContent.trim() || 'Untitled' });
   }
-  for (const [b, push] of writes) {
-    b._push = push;
-    if (push) b.style.paddingTop = push + 'px';
-    else b.removeAttribute('style');
-  }
-  const pages = Math.floor((bottom + M - 1) / PITCH) + 1;
-  ed.style.minHeight = pages * PITCH - GAP + 'px';
-  renderPages(pages);
-  layoutInfo = { heads, pages, k };
+  layoutInfo = { heads, k };
   renderToc();
   onScroll();
-}
-
-function renderPages(n) {
-  const have = el.pages.children.length;
-  if (have === n) return;
-  if (have > n) {
-    while (el.pages.children.length > n) el.pages.lastChild.remove();
-    return;
-  }
-  const f = document.createDocumentFragment();
-  for (let i = have; i < n; i++) {
-    const d = document.createElement('div');
-    d.className = 'page';
-    d.style.top = i * PITCH + 'px';
-    d.dataset.n = i + 1;
-    f.append(d);
-  }
-  el.pages.append(f);
 }
 
 let tocKey = '';
 function renderToc() {
   const { heads } = layoutInfo;
-  const key = heads.map(h => h.text + '\u0001' + h.page).join('\u0002');
+  const key = heads.map(h => h.text).join('\u0002');
   if (key === tocKey) return;
   tocKey = key;
   const f = document.createDocumentFragment();
@@ -360,9 +316,8 @@ function renderToc() {
     const b = document.createElement('button');
     b.type = 'button';
     b.dataset.i = i;
-    b.innerHTML = '<span class="t"></span><span class="pg"></span>';
+    b.innerHTML = '<span class="t"></span>';
     b.firstChild.textContent = h.text;
-    b.lastChild.textContent = h.page;
     li.append(b);
     f.append(li);
   });
@@ -382,13 +337,11 @@ function onScroll() {
   scrollQueued = true;
   requestAnimationFrame(() => {
     scrollQueued = false;
-    const { heads, pages, k } = layoutInfo;
+    const { heads, k } = layoutInfo;
     const ed = curEd();
     if (!ed) return;
     const sr = el.scroller.getBoundingClientRect();
     const y = (sr.top - ed.getBoundingClientRect().top + sr.height / 3) / (k || 1);
-    const page = Math.min(pages, Math.max(1, Math.floor(y / PITCH) + 1));
-    el.stPage.textContent = `Page ${page} of ${pages}`;
     let lo = 0, hi = heads.length - 1, idx = -1;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (heads[mid].y <= y) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
     if (idx !== activeHead) {
@@ -397,6 +350,7 @@ function onScroll() {
       el.toc.children[idx]?.scrollIntoView({ block: 'nearest' });
       activeHead = idx;
     }
+    el.stPage.textContent = curTab().kind === 'ms' && idx >= 0 ? `Chapter ${idx + 1} of ${heads.length}` : '';
     later('scrollpos', 400, () => pref.set('scroll.' + book.active, el.scroller.scrollTop));
   });
 }
@@ -407,7 +361,6 @@ function meta() {
   let words = 0;
   for (const b of ed.children) words += ((b.querySelector('br') ? b.innerText : b.textContent).match(/[^\s—–-]+/g) || []).length;
   el.stWords.textContent = words.toLocaleString('en-GB') + (words === 1 ? ' word' : ' words');
-  const er = ed.getBoundingClientRect(), k = er.width / PAGE_W || 1;
   const fixes = [...ed.querySelectorAll('font')].filter(f => markOf(f) === 'fix');
   t.fixes = fixes.length;
   el.fixCount.textContent = fixes.length;
@@ -417,9 +370,8 @@ function meta() {
     const b = document.createElement('button');
     b.type = 'button';
     b.dataset.i = i;
-    b.innerHTML = '<span class="t"></span><span class="pg"></span>';
+    b.innerHTML = '<span class="t"></span>';
     b.firstChild.textContent = n.textContent.trim().slice(0, 80) || '(empty)';
-    b.lastChild.textContent = Math.floor((n.getBoundingClientRect().top - er.top) / k / PITCH) + 1;
     li.append(b);
     f.append(li);
   });
@@ -437,8 +389,7 @@ let fixNodes = [], fixIdx = -1;
 
 function goTo(node, select, center) {
   const b = node.getBoundingClientRect(), sr = el.scroller.getBoundingClientRect();
-  const pad = (node._push || 0) * layoutInfo.k;
-  el.scroller.scrollTop += b.top + pad - sr.top - (center ? (sr.height - b.height + pad) / 2 : (M + 16) * layoutInfo.k);
+  el.scroller.scrollTop += b.top - sr.top - (center ? (sr.height - b.height) / 2 : (M + 16) * layoutInfo.k);
   const ed = curEd();
   ed.focus({ preventScroll: true });
   const r = document.createRange();
@@ -580,7 +531,7 @@ const G = {
 };
 try {
   const s = JSON.parse(localStorage.getItem('io.token') || 'null');
-  if (s && s.exp > Date.now()) { G.token = s.token; G.exp = s.exp; }
+  if (s && s.exp > Date.now()) { G.token = s.token; G.exp = s.exp; G.scope = s.scope || SCOPE; }
 } catch {}
 function dropToken() {
   G.token = null;
@@ -598,19 +549,23 @@ function loadGis() {
   });
 }
 
-async function signIn() {
+const wantScope = () => pref.get('docsAccess', false) || book.tabs.some(t => t.linked) ? SCOPE_DOCS : SCOPE;
+const hasDocs = () => G.valid() && SCOPE_DOCS.split(' ').every(x => (G.scope || '').split(' ').includes(x));
+
+async function signIn(scope = wantScope()) {
   if (!G.clientId()) throw new Error('Add the OAuth client ID in Settings first.');
   await loadGis();
   return new Promise((res, rej) => {
     const c = google.accounts.oauth2.initTokenClient({
       client_id: G.clientId(),
-      scope: SCOPE,
+      scope,
       hint: pref.get('googleEmail', ''),
       callback: r => {
         if (r.error) return rej(new Error(r.error_description || r.error));
         G.token = r.access_token;
         G.exp = Date.now() + r.expires_in * 1000;
-        try { localStorage.setItem('io.token', JSON.stringify({ token: G.token, exp: G.exp })); } catch {}
+        G.scope = r.scope || scope;
+        try { localStorage.setItem('io.token', JSON.stringify({ token: G.token, exp: G.exp, scope: G.scope })); } catch {}
         pref.set('signedIn', true);
         renderSync();
         res();
@@ -652,7 +607,7 @@ async function gblob(method, url, body, type) {
 const gzip = str => new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
 const gunzip = blob => new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).text();
 
-const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt'];
+const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt', 'linked'];
 const shareBook = () => ({
   title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {},
   tabs: book.tabs.map(t => Object.fromEntries(SHARED.map(k => [k, t[k] ?? null]))),
@@ -676,7 +631,7 @@ async function mergeData(remote) {
     const t = tabById(id);
     if (!t) continue;
     if (t.rev === t.baseRev) { drop(id); continue; }
-    const html = await tabHtml(t), c = { ...t, id: uid(), name: t.name + ' (deleted on other device)', docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
+    const html = await tabHtml(t), c = { ...t, id: uid(), name: t.name + ' (deleted on other device)', linked: null, docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
     drop(id);
     book.tabs.push(c);
     puts.push(['tab:' + c.id, html]);
@@ -703,12 +658,12 @@ async function mergeData(remote) {
       puts.push(['tab:' + t.id, html]);
       if (editors[t.id]) { editors[t.id].innerHTML = html || starter(t); shown ||= t.id === book.active; }
     } else if (theirs) {
-      const c = { ...r, id: uid(), kind: 'notes', name: r.name + ' (other device)', docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
+      const c = { ...r, id: uid(), kind: 'notes', name: r.name + ' (other device)', linked: null, docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
       book.tabs.push(c);
       puts.push(['tab:' + c.id, html]);
     }
     if ((r.nameAt || 0) > (t.nameAt || 0)) { t.name = r.name; t.nameAt = r.nameAt; }
-    if ((r.pushedAt || 0) > (t.pushedAt || 0)) for (const k of ['docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt']) t[k] = r[k];
+    if ((r.pushedAt || 0) > (t.pushedAt || 0)) for (const k of ['docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt', 'linked']) t[k] = r[k];
   }
   if (!book.tabs.length) book.tabs = newBook().tabs;
   await dbPut(puts);
@@ -781,13 +736,14 @@ function docModel(root) {
   return { text, paras, runs };
 }
 
-function docRequests(m, docEnd) {
+function docRequests(m, docEnd, linked) {
   const reqs = [];
   if (docEnd - 1 > 1) reqs.push({ deleteContentRange: { range: { startIndex: 1, endIndex: docEnd - 1 } } });
   const ins = m.text.slice(0, -1);
   const L = ins.length;
   if (L) reqs.push({ insertText: { location: { index: 1 }, text: ins } });
   reqs.push({ updateParagraphStyle: { range: { startIndex: 1, endIndex: L + 2 }, paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
+  if (linked) reqs.push({ deleteParagraphBullets: { range: { startIndex: 1, endIndex: L + 2 } } });
   for (const p of m.paras) {
     if (p.h) reqs.push({ updateParagraphStyle: { range: { startIndex: p.start + 1, endIndex: p.end + 1 }, paragraphStyle: { namedStyleType: 'HEADING_1' }, fields: 'namedStyleType' } });
   }
@@ -807,7 +763,7 @@ function docRequests(m, docEnd) {
   return reqs;
 }
 
-const docTitle = t => `${book.title} - ${t.name}`;
+const docTitle = t => t.linked ? t.docTitle : `${book.title} - ${t.name}`;
 const needsPush = t => !t.docId || t.updatedAt > t.syncedAt || t.docTitle !== docTitle(t);
 
 async function pushTab(t, interactive) {
@@ -819,7 +775,7 @@ async function pushTab(t, interactive) {
   let doc = null;
   if (t.docId) {
     try { doc = await gfetch('GET', `${DOCS}/${t.docId}?fields=revisionId,body(content(endIndex))`); }
-    catch (e) { if (e.status === 404) t.docId = null; else throw e; }
+    catch (e) { if (e.status === 404) { t.docId = null; t.linked = null; } else throw e; }
   }
   if (doc && t.revisionId && doc.revisionId !== t.revisionId) {
     if (!interactive) { t.conflict = true; return; }
@@ -837,7 +793,7 @@ async function pushTab(t, interactive) {
   }
   const content = doc.body.content || [];
   const end = content.length ? content[content.length - 1].endIndex : 2;
-  const res = await gfetch('POST', `${DOCS}/${t.docId}:batchUpdate`, { requests: docRequests(m, end) });
+  const res = await gfetch('POST', `${DOCS}/${t.docId}:batchUpdate`, { requests: docRequests(m, end, t.linked) });
   t.revisionId = res.writeControl?.requiredRevisionId || null;
   t.syncedAt = snapAt;
   t.pushedAt = Date.now();
@@ -856,7 +812,8 @@ async function pushAll(interactive) {
     if (!G.valid()) await signIn();
     await syncData();
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
-    const todo = docsDue ? book.tabs.filter(t => needsPush(t) && (interactive || !t.conflict)) : [];
+    const todo = docsDue ? book.tabs.filter(t => needsPush(t) && (interactive || !t.conflict) && (!t.linked || hasDocs())) : [];
+    if (interactive && !hasDocs() && book.tabs.some(t => t.linked && needsPush(t))) toast('Sign in to Google again (Settings) to save the Docs you opened from Google.');
     if (todo.length) {
       for (const t of todo) await pushTab(t, interactive);
       book.docsAt = Date.now();
@@ -917,6 +874,151 @@ function renderDocLinks() {
     f.append(li);
   }
   $('#docLinks').replaceChildren(f);
+}
+
+function hexOf(c) {
+  const r = c?.color?.rgbColor;
+  return r ? '#' + ['red', 'green', 'blue'].map(k => Math.round((r[k] || 0) * 255).toString(16).padStart(2, '0')).join('') : null;
+}
+function markFromStyle(ts) {
+  const fg = hexOf(ts.foregroundColor), bg = hexOf(ts.backgroundColor);
+  if (fg === '#6b4f00' || bg === '#ffe17a') return 'fix';
+  for (const k in MARKS) if (MARKS[k] === fg) return k;
+  return null;
+}
+
+function docHtml(doc) {
+  const tabs = [], lost = {};
+  const note = k => { lost[k] = (lost[k] || 0) + 1; };
+  const allTabs = ts => { for (const t of ts || []) { tabs.push(t); allTabs(t.childTabs); } };
+  allTabs(doc.tabs);
+  if (tabs.length > 1) lost.tabs = tabs.length - 1;
+  const out = [];
+  const para = p => {
+    const st = p.paragraphStyle?.namedStyleType || 'NORMAL_TEXT';
+    const h = st === 'TITLE' || st.startsWith('HEADING_');
+    if (h && st !== 'HEADING_1') note('sub');
+    if (p.bullet) note('list');
+    let html = '';
+    for (const e of p.elements || []) {
+      if (e.inlineObjectElement || e.positionedObjectElement) { note('image'); continue; }
+      if (e.footnoteReference) { note('footnote'); continue; }
+      const r = e.textRun;
+      if (!r) continue;
+      const s = r.content.replace(/\n$/, '');
+      if (!s) continue;
+      const ts = r.textStyle || {};
+      let x = esc(s).replace(/\u000b/g, '<br>');
+      if (ts.link) note('link');
+      if (ts.underline && !ts.link) x = `<u>${x}</u>`;
+      if (ts.italic) x = `<i>${x}</i>`;
+      if (ts.bold) x = `<b>${x}</b>`;
+      const m = markFromStyle(ts);
+      if (m) x = `<font color="${MARKS[m]}">${x}</font>`;
+      html += x;
+    }
+    const tag = h ? 'h1' : 'p';
+    out.push(`<${tag}>${html || '<br>'}</${tag}>`);
+  };
+  const walk = content => {
+    for (const c of content || []) {
+      if (c.paragraph) para(c.paragraph);
+      else if (c.table) { note('table'); for (const row of c.table.tableRows || []) for (const cell of row.tableCells || []) walk(cell.content); }
+      else if (c.tableOfContents) note('toc');
+    }
+  };
+  walk((tabs[0]?.documentTab || doc).body?.content);
+  return { html: out.join('') || '<p><br></p>', lost };
+}
+
+const LOST = {
+  tabs: 'its other tabs (Io opens the first tab only)', table: 'tables (their text comes in as plain paragraphs)',
+  image: 'pictures', list: 'list bullets', sub: 'subheadings and titles (they become chapter headings)',
+  link: 'links', footnote: 'footnotes', toc: 'the table of contents',
+};
+
+async function openDocFile(f) {
+  try {
+    const doc = await gfetch('GET', `${DOCS}/${f.id}?includeTabsContent=true&suggestionsViewMode=PREVIEW_WITHOUT_SUGGESTIONS`);
+    const { html, lost } = docHtml(doc);
+    const t = book.tabs.find(x => x.docId === f.id);
+    if (t) {
+      if (t.id !== book.active) await openTab(t.id);
+      if (!t.linked) return;
+      if (!await ask({ title: 'Already open', text: `"${t.name}" is this Doc. Load it again from Google? Edits made in Io since it was last saved to Google will be lost.`, ok: 'Load from Google', cancel: 'Keep Io\'s version', danger: true })) return;
+      Object.assign(t, { rev: uid(), updatedAt: Date.now(), syncedAt: Date.now(), revisionId: doc.revisionId, conflict: false });
+      if (editors[t.id]) editors[t.id].innerHTML = html;
+      else await dbPut([['tab:' + t.id, html]]);
+      dirty.add(t.id);
+      await flush();
+      layout();
+      meta();
+      renderSync();
+      return toast('Loaded from Google.');
+    }
+    const kinds = Object.keys(lost);
+    if (kinds.length && !await ask({
+      title: 'Some of this Doc will not come across',
+      text: `Io cannot show ${kinds.map(k => LOST[k]).join(', ')}. Saving from Io rewrites the whole Doc, so these would be removed from it. Google keeps the old version in its version history. Open it anyway?`,
+      ok: 'Open', danger: true,
+    })) return;
+    const now = Date.now();
+    const name = doc.title.slice(0, 60) || 'Untitled';
+    const n = {
+      id: uid(), name: book.tabs.some(x => x.name === name) ? name + ' (Google)' : name, kind: 'notes', linked: true, rev: uid(), updatedAt: now, nameAt: now,
+      docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, syncedAt: now, pushedAt: now, fixes: 0,
+    };
+    book.tabs.push(n);
+    await dbPut([['tab:' + n.id, html]]);
+    await openTab(n.id);
+    renderSync();
+    toast(`Opened "${doc.title}". Ctrl+S saves it back to the Doc.`);
+  } catch (e) {
+    toast('Could not open the Doc: ' + e.message);
+  }
+}
+
+const emptyLi = text => Object.assign(document.createElement('li'), { className: 'empty', textContent: text });
+let listSeq = 0;
+async function listDocs(q) {
+  const list = $('#openList'), seq = ++listSeq;
+  list.replaceChildren(emptyLi('Loading…'));
+  let query = `mimeType='${GDOC}' and trashed=false`;
+  if (q) query += ` and name contains '${q.replace(/[\\']/g, '\\$&')}'`;
+  try {
+    const r = await gfetch('GET', `${DRIVE}/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&pageSize=100&fields=files(id,name,modifiedTime)`);
+    if (seq !== listSeq) return;
+    const f = document.createDocumentFragment();
+    for (const d of r.files) {
+      const t = book.tabs.find(x => x.docId === d.id);
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = '<span class="t"></span><span class="pg"></span>';
+      b.firstChild.textContent = d.name;
+      b.lastChild.textContent = t ? (t.linked ? 'open in Io' : 'Io copy of ' + t.name) : when(Date.parse(d.modifiedTime));
+      b.addEventListener('click', () => { $('#open').close(); openDocFile(d); });
+      li.append(b);
+      f.append(li);
+    }
+    if (!r.files.length) f.append(emptyLi(q ? 'No Docs match.' : 'No Google Docs found.'));
+    list.replaceChildren(f);
+  } catch (e) {
+    if (seq === listSeq) list.replaceChildren(emptyLi('Could not list your Docs: ' + e.message));
+  }
+}
+
+async function openDocs() {
+  if (!navigator.onLine) return toast('Offline. Opening a Google Doc needs a connection.');
+  if (!G.clientId()) return openMenu();
+  if (!hasDocs()) {
+    pref.set('docsAccess', true);
+    try { await signIn(SCOPE_DOCS); } catch (e) { return toast(e.message); }
+    if (!hasDocs()) return toast('Io needs permission to see and edit your Google Docs. Tick both boxes when Google asks.');
+  }
+  $('#openQ').value = '';
+  $('#open').showModal();
+  listDocs('');
 }
 
 function ask({ title, text = '', value = null, ok = 'OK', cancel = 'Cancel', danger = false }) {
@@ -1016,12 +1118,16 @@ function wire() {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return;
     if (e.key.toLowerCase() === 's') { e.preventDefault(); flush().then(() => pushAll(true)); }
+    else if (e.key.toLowerCase() === 'o') { e.preventDefault(); openDocs(); }
     else if (e.key === '=' || e.key === '+') { e.preventDefault(); stepZoom(1); }
     else if (e.key === '-') { e.preventDefault(); stepZoom(-1); }
     else if (e.key === '0' && !e.shiftKey) { e.preventDefault(); setZoom(1); }
   });
 
   el.syncBtn.addEventListener('click', () => pushAll(true));
+  $('#openBtn').addEventListener('click', openDocs);
+  $('#openQ').addEventListener('input', e => later('openq', 300, () => listDocs(e.target.value.trim())));
+  $('#openQ').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
   el.stSync.addEventListener('click', () => {
     if (!G.clientId()) openMenu();
     else if (!G.valid()) signIn().then(() => pushAll(false), e => toast(e.message));
