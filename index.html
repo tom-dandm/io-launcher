@@ -91,9 +91,17 @@
     <ul class="doc-links" id="docLinks"></ul>
 
     <h3>Backup</h3>
+    <div id="autoBackup">
+      <p class="hint" id="autoText"></p>
+      <div class="btns">
+        <button type="button" id="backupDirBtn">Choose backup folder</button>
+        <button type="button" id="backupNowBtn" hidden>Back up now</button>
+        <button type="button" id="backupStopBtn" class="plain" hidden>Stop</button>
+      </div>
+    </div>
     <div class="btns">
       <button type="button" id="backupBtn">Download backup</button>
-      <label class="file-btn">Restore backup<input type="file" id="restoreFile" accept=".json,application/json" hidden></label>
+      <label class="file-btn">Restore backup<input type="file" id="restoreFile" accept=".json,.gz,application/json,application/gzip" hidden></label>
     </div>
 
     <h3>Shortcuts</h3>

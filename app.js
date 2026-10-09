@@ -501,18 +501,100 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-async function backup() {
+async function backupData() {
   await flush();
   const tabs = {};
   for (const t of book.tabs) tabs[t.id] = editors[t.id] ? serialize(editors[t.id]) : (await dbGet('tab:' + t.id)) || '';
+  return JSON.stringify({ io: 1, savedAt: Date.now(), book, tabs });
+}
+const fileBase = () => book.title.replace(/[^\w -]+/g, '').trim() || 'io';
+
+async function backup() {
   const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-  download(`${book.title.replace(/[^\w -]+/g, '').trim() || 'io'}-${stamp}.json`, JSON.stringify({ io: 1, savedAt: Date.now(), book, tabs }), 'application/json');
+  download(`${fileBase()}-${stamp}.json`, await backupData(), 'application/json');
+}
+
+const AUTO_EVERY = 60 * 60 * 1000, AUTO_KEEP = 30;
+const autoSig = () => book.title + '|' + book.tabs.map(t => t.id + ':' + t.rev + ':' + t.name).join('|');
+const day = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+async function autoDir(ask) {
+  const dir = await dbGet('backupDir');
+  if (!dir) return null;
+  let p = await dir.queryPermission({ mode: 'readwrite' });
+  if (p === 'prompt' && ask && !autoDir.asked) {
+    autoDir.asked = true;
+    p = await dir.requestPermission({ mode: 'readwrite' }).catch(() => 'denied');
+  }
+  return p === 'granted' ? dir : null;
+}
+
+async function autoBackup(force = false, gesture = false) {
+  if (!window.showDirectoryPicker || autoBackup.busy) return;
+  const last = pref.get('autoLast', null);
+  if (!force && last && (Date.now() - last.at < AUTO_EVERY || last.sig === autoSig())) return;
+  autoBackup.busy = true;
+  try {
+    if (force) autoDir.asked = false;
+    const dir = await autoDir(gesture || force);
+    if (!dir) { renderBackup(); return; }
+    const sig = autoSig(), blob = await gzip(await backupData());
+    const name = `${fileBase()} ${day(new Date())}.io.json.gz`;
+    const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+    await w.write(blob);
+    await w.close();
+    pref.set('autoLast', { at: Date.now(), sig, size: blob.size, name });
+    const old = [];
+    for await (const [n, h] of dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz')) old.push(n);
+    old.sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
+    for (const n of old.slice(AUTO_KEEP)) await dir.removeEntry(n).catch(() => {});
+    if (force) toast(`Backed up to ${dir.name}/${name} (${kb(blob.size)}).`);
+  } catch (e) {
+    if (force) toast('Backup failed: ' + e.message);
+  } finally {
+    autoBackup.busy = false;
+    renderBackup();
+  }
+}
+
+const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+
+async function chooseBackupDir() {
+  try {
+    const dir = await showDirectoryPicker({ id: 'io-backup', mode: 'readwrite', startIn: 'documents' });
+    await dbPut([['backupDir', dir]]);
+    pref.set('autoLast', null);
+    autoBackup(true, true);
+  } catch (e) { if (e.name !== 'AbortError') toast(e.message); }
+}
+
+async function stopBackups() {
+  await dbPut([['backupDir', undefined]]);
+  pref.set('autoLast', null);
+  renderBackup();
+}
+
+async function renderBackup() {
+  const box = $('#autoBackup');
+  if (!window.showDirectoryPicker) { box.innerHTML = '<p class="hint">Automatic backups to a folder work in Chrome or Edge on a computer. On this device, your copy in Google is the backup.</p>'; return; }
+  const dir = await dbGet('backupDir');
+  const last = pref.get('autoLast', null);
+  const ok = dir && await dir.queryPermission({ mode: 'readwrite' }) === 'granted';
+  $('#autoText').textContent = !dir ? 'Io can save a backup to a folder you pick (OneDrive, a USB stick) every hour while you write. One file a day, the last 30 days kept.'
+    : `Backing up to the folder "${dir.name}" every hour while you write. One file a day, the last ${AUTO_KEEP} days kept.`
+      + (last ? ` Last backup ${when(last.at)}, ${kb(last.size)}.` : '')
+      + (ok ? '' : ' Click anywhere in Io to let it write there again.');
+  $('#backupDirBtn').textContent = dir ? 'Change folder' : 'Choose backup folder';
+  $('#backupNowBtn').hidden = $('#backupStopBtn').hidden = !dir;
 }
 
 async function restore(file) {
   let data;
   const notBackup = () => ask({ title: 'Not an Io backup', text: 'That file is not an Io backup.', cancel: null });
-  try { data = JSON.parse(await file.text()); } catch { return notBackup(); }
+  try {
+    const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+    data = JSON.parse(head[0] === 0x1f && head[1] === 0x8b ? await gunzip(file) : await file.text());
+  } catch { return notBackup(); }
   if (!data || data.io !== 1 || !data.book?.tabs) return notBackup();
   if (!await ask({ title: 'Restore backup?', text: `Replace everything in Io with the backup from ${when(data.savedAt)}? Download a backup of the current version first if you might want it.`, ok: 'Restore', danger: true })) return;
   const entries = [['book', data.book]];
@@ -1045,6 +1127,7 @@ function toast(msg) {
 function openMenu() {
   $('#autoPush').checked = pref.get('autoPush', true);
   renderDocLinks();
+  renderBackup();
   el.menu.showModal();
 }
 
@@ -1134,6 +1217,10 @@ function wire() {
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
   $('#pushBtn').addEventListener('click', () => pushAll(true));
   $('#backupBtn').addEventListener('click', backup);
+  $('#backupDirBtn').addEventListener('click', chooseBackupDir);
+  $('#backupNowBtn').addEventListener('click', () => autoBackup(true));
+  $('#backupStopBtn').addEventListener('click', stopBackups);
+  document.addEventListener('click', () => autoBackup(false, true), true);
   $('#restoreFile').addEventListener('change', e => { if (e.target.files[0]) restore(e.target.files[0]); e.target.value = ''; });
 
   addEventListener('online', () => { renderSync(); pushAll(false); });
@@ -1144,11 +1231,11 @@ function wire() {
     layout();
   }));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { clearTimeout(timers.book); dbPut([['book', book]]).then(flush).then(() => pushAll(false)); }
-    else pushAll(false);
+    if (document.hidden) { clearTimeout(timers.book); dbPut([['book', book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
+    else { pushAll(false); autoBackup(); }
   });
   addEventListener('pagehide', flush);
-  setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); }, PUSH_EVERY);
+  setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); autoBackup(); }, PUSH_EVERY);
 }
 
 function closeNavOnPhone() { el.shell.classList.remove('nav-open'); }
@@ -1194,6 +1281,7 @@ async function init() {
   if (navigator.onLine && pref.get('signedIn', false)) loadGis().catch(() => {});
   if (navigator.onLine && G.valid()) pushAll(false);
   renderSync();
+  autoBackup();
 }
 
 init();
