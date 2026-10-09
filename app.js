@@ -181,13 +181,12 @@ function onPaste(e) {
 
 function onKey(e) {
   const mod = e.ctrlKey || e.metaKey;
+  const fk = { F1: 'red', F2: 'green', F3: 'blue' }[e.key];
+  if (fk && !mod && !e.altKey && !e.shiftKey) { e.preventDefault(); return void run(fk); }
   if (!mod) return;
   let c = null;
   if (e.altKey && !e.shiftKey && e.code === 'Digit1') c = 'heading';
   else if (e.altKey && !e.shiftKey && e.code === 'Digit0') c = 'body';
-  else if (e.altKey && !e.shiftKey && e.code === 'KeyR') c = 'red';
-  else if (e.altKey && !e.shiftKey && e.code === 'KeyG') c = 'green';
-  else if (e.altKey && !e.shiftKey && e.code === 'KeyB') c = 'blue';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyE') c = 'edit';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyX') c = 'remove';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyF') c = 'fix';
