@@ -13,6 +13,7 @@ const DOCS_EVERY = 15 * 60000;
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const DATA_NAME = 'Io data.json.gz';
+const CLIENT_ID = '257581565054-a3i5pvi1akkcq2s9i7rt4jp140pdh7rm.apps.googleusercontent.com';
 
 const $ = s => document.querySelector(s);
 const el = {
@@ -526,7 +527,7 @@ const G = {
   token: null,
   exp: 0,
   busy: false,
-  clientId: () => pref.get('clientId', ''),
+  clientId: () => pref.get('clientId', '') || CLIENT_ID,
   valid() { return this.token && Date.now() < this.exp - 60000; },
 };
 try {
