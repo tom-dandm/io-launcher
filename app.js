@@ -582,6 +582,18 @@ async function autoDir(ask) {
   return p === 'granted' ? dir : null;
 }
 
+async function autoBackupHere(dir, name) {
+  const blob = await gzip(await backupData());
+  const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+  await w.write(blob);
+  await w.close();
+  const old = [];
+  for await (const [n, h] of dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz')) old.push(n);
+  const mine = old.filter(n => n.slice(0, -21) === name.slice(0, -21)).sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
+  for (const n of mine.slice(AUTO_KEEP)) await dir.removeEntry(n).catch(() => {});
+  return blob.size;
+}
+
 async function autoBackup(force = false, gesture = false) {
   if (!window.showDirectoryPicker || autoBackup.busy) return;
   const last = pref.get('autoLast.' + book.id, null);
@@ -591,17 +603,13 @@ async function autoBackup(force = false, gesture = false) {
     if (force) autoDir.asked = false;
     const dir = await autoDir(gesture || force);
     if (!dir) { renderBackup(); return; }
-    const sig = autoSig(), blob = await gzip(await backupData());
-    const name = `${fileBase()} ${day(new Date())}.io.json.gz`;
-    const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
-    await w.write(blob);
-    await w.close();
-    pref.set('autoLast.' + book.id, { at: Date.now(), sig, size: blob.size, name });
-    const old = [];
-    for await (const [n, h] of dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz')) old.push(n);
-    const mine = old.filter(n => n.slice(0, -21) === name.slice(0, -21)).sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
-    for (const n of mine.slice(AUTO_KEEP)) await dir.removeEntry(n).catch(() => {});
-    if (force) toast(`Backed up to ${dir.name}/${name} (${kb(blob.size)}).`);
+    if (!force) await new Promise(r => idle(r));
+    await flush();
+    const sig = autoSig(), name = `${fileBase()} ${day(new Date())}.io.json.gz`;
+    let size = (await inBackground({ key: 'tabs', head: { io: 1, savedAt: Date.now(), book }, ids: book.tabs.map(t => t.id), fallback: {}, dir, name, keep: AUTO_KEEP }))?.size;
+    if (size === undefined) size = await autoBackupHere(dir, name);
+    pref.set('autoLast.' + book.id, { at: Date.now(), sig, size, name });
+    if (force) toast(`Backed up to ${dir.name}/${name} (${kb(size)}).`);
   } catch (e) {
     if (force) toast('Backup failed: ' + e.message);
   } finally {
@@ -749,6 +757,48 @@ async function gblob(method, url, body, type) {
 const gzip = str => new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
 const gunzip = blob => new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).text();
 
+const PACKER = `
+const db = new Promise((res, rej) => { const r = indexedDB.open('io'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const get = async k => { const d = await db; return new Promise((res, rej) => { const q = d.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
+onmessage = async ({ data: j }) => {
+  try {
+    const tabs = {};
+    for (const id of j.ids) tabs[id] = (await get('tab:' + id)) || j.fallback[id] || '';
+    const str = JSON.stringify({ ...j.head, [j.key]: tabs });
+    const blob = await new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    if (!j.dir) return postMessage({ n: j.n, blob });
+    const w = await (await j.dir.getFileHandle(j.name, { create: true })).createWritable();
+    await w.write(blob);
+    await w.close();
+    const old = [], pre = j.name.slice(0, -21);
+    for await (const [n, h] of j.dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz') && n.slice(0, -21) === pre) old.push(n);
+    old.sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
+    for (const n of old.slice(j.keep)) await j.dir.removeEntry(n).catch(() => {});
+    postMessage({ n: j.n, size: blob.size });
+  } catch (e) { postMessage({ n: j.n, error: e.message }); }
+};`;
+let packer = null, packN = 0;
+function inBackground(job) {
+  try { packer ||= new Worker(URL.createObjectURL(new Blob([PACKER], { type: 'text/javascript' }))); }
+  catch { return null; }
+  const n = ++packN;
+  return new Promise((res, rej) => {
+    const on = ({ data }) => {
+      if (data.n !== n) return;
+      packer.removeEventListener('message', on);
+      data.error ? rej(new Error(data.error)) : res(data);
+    };
+    packer.addEventListener('message', on);
+    packer.postMessage({ ...job, n });
+  });
+}
+const pack = async (key, head, fallback) => {
+  await flush();
+  const ids = book.tabs.map(t => t.id), fb = {};
+  for (const t of book.tabs) fb[t.id] = fallback(t);
+  return inBackground({ key, head, ids, fallback: fb });
+};
+
 const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt', 'linked'];
 const shareBook = () => ({
   title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {},
@@ -830,9 +880,13 @@ async function syncData() {
     if (remote?.io === 1) { await mergeData(remote); base = sigOf(remote.book); }
   }
   if (!id || sigOf(book) !== base) {
-    const html = {};
-    for (const t of book.tabs) html[t.id] = await tabHtml(t);
-    const body = await gzip(JSON.stringify({ io: 1, savedAt: Date.now(), book: shareBook(), html }));
+    const head = { io: 1, savedAt: Date.now(), book: shareBook() };
+    let body = (await pack('html', head, starter))?.blob;
+    if (!body) {
+      const html = {};
+      for (const t of book.tabs) html[t.id] = await tabHtml(t);
+      body = await gzip(JSON.stringify({ ...head, html }));
+    }
     if (!id) id = (await gfetch('POST', `${DRIVE}/files?fields=id`, { name: dataName(book), mimeType: 'application/gzip' })).id;
     version = (await (await gblob('PATCH', `${UPLOAD}/${id}?uploadType=media&fields=version`, body, 'application/gzip')).json()).version;
   }
