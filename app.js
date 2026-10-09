@@ -527,7 +527,6 @@ const G = {
   token: null,
   exp: 0,
   busy: false,
-  clientId: () => pref.get('clientId', '') || CLIENT_ID,
   valid() { return this.token && Date.now() < this.exp - 60000; },
 };
 try {
@@ -554,11 +553,10 @@ const wantScope = () => pref.get('docsAccess', false) || book.tabs.some(t => t.l
 const hasDocs = () => G.valid() && SCOPE_DOCS.split(' ').every(x => (G.scope || '').split(' ').includes(x));
 
 async function signIn(scope = wantScope()) {
-  if (!G.clientId()) throw new Error('Add the OAuth client ID in Settings first.');
   await loadGis();
   return new Promise((res, rej) => {
     const c = google.accounts.oauth2.initTokenClient({
-      client_id: G.clientId(),
+      client_id: CLIENT_ID,
       scope,
       hint: pref.get('googleEmail', ''),
       callback: r => {
@@ -579,7 +577,7 @@ async function signIn(scope = wantScope()) {
 }
 
 function renewOnClick() {
-  if (G.renewing || G.busy || G.valid() || !pref.get('signedIn', false) || !G.clientId() || !navigator.onLine || !window.google?.accounts?.oauth2) return;
+  if (G.renewing || G.busy || G.valid() || !pref.get('signedIn', false) || !navigator.onLine || !window.google?.accounts?.oauth2) return;
   G.renewing = true;
   signIn().then(() => pushAll(false), () => renderSync()).finally(() => { G.renewing = false; });
 }
@@ -804,7 +802,6 @@ async function pushTab(t, interactive) {
 async function pushAll(interactive) {
   if (G.busy) return;
   if (!navigator.onLine) { if (interactive) toast('Offline. Io will push when you are back online.'); return; }
-  if (!G.clientId()) { if (interactive) openMenu(); return; }
   if (!interactive && !G.valid()) return renderSync();
   G.busy = true;
   renderSync();
@@ -839,8 +836,7 @@ function renderSync() {
   const conflict = tabs.some(t => t.conflict);
   const last = Math.max(0, ...tabs.map(t => t.pushedAt || 0));
   let label, state, note = '';
-  if (!G.clientId()) { label = 'Set up Google Doc'; state = ''; }
-  else if (G.busy) { label = 'Pushing…'; state = 'pending'; }
+  if (G.busy) { label = 'Pushing…'; state = 'pending'; }
   else if (G.error || conflict) {
     label = 'Push to Google'; state = 'warn';
     note = conflict ? 'Changed in Google Docs. Press Push to overwrite.' : G.error;
@@ -850,8 +846,7 @@ function renderSync() {
   else { label = 'Google Doc'; state = 'ok'; }
   b.textContent = label;
   b.dataset.state = state;
-  if (!note && !G.clientId()) note = 'Not copied to Google Docs';
-  else if (!note && !G.valid() && !G.busy) note =pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
+  if (!note && !G.valid() && !G.busy) note =pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
   const warn = !!note;
   if (!navigator.onLine) note = 'Offline. Saved on this computer.';
   const lastTxt = book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Pushed ' + when(last) : '';
@@ -1011,7 +1006,6 @@ async function listDocs(q) {
 
 async function openDocs() {
   if (!navigator.onLine) return toast('Offline. Opening a Google Doc needs a connection.');
-  if (!G.clientId()) return openMenu();
   if (!hasDocs()) {
     pref.set('docsAccess', true);
     try { await signIn(SCOPE_DOCS); } catch (e) { return toast(e.message); }
@@ -1049,7 +1043,6 @@ function toast(msg) {
 }
 
 function openMenu() {
-  $('#clientId').value = G.clientId();
   $('#autoPush').checked = pref.get('autoPush', true);
   renderDocLinks();
   el.menu.showModal();
@@ -1130,18 +1123,16 @@ function wire() {
   $('#openQ').addEventListener('input', e => later('openq', 300, () => listDocs(e.target.value.trim())));
   $('#openQ').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
   el.stSync.addEventListener('click', () => {
-    if (!G.clientId()) openMenu();
-    else if (!G.valid()) signIn().then(() => pushAll(false), e => toast(e.message));
+    if (!G.valid()) signIn().then(() => pushAll(false), e => toast(e.message));
     else pushAll(true);
   });
   document.addEventListener('click', renewOnClick, true);
   $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ask').close('ok'); } });
   $('#menuBtn').addEventListener('click', openMenu);
   $('#fontSel').addEventListener('change', e => setFont(e.target.value));
-  $('#clientId').addEventListener('change', e => { pref.set('clientId', e.target.value.trim()); renderSync(); });
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
-  $('#connectBtn').addEventListener('click', () => { pref.set('clientId', $('#clientId').value.trim()); signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
-  $('#pushBtn').addEventListener('click', () => { pref.set('clientId', $('#clientId').value.trim()); pushAll(true); });
+  $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
+  $('#pushBtn').addEventListener('click', () => pushAll(true));
   $('#backupBtn').addEventListener('click', backup);
   $('#restoreFile').addEventListener('change', e => { if (e.target.files[0]) restore(e.target.files[0]); e.target.value = ''; });
 
@@ -1200,7 +1191,7 @@ async function init() {
   await openTab(book.active);
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
-  if (navigator.onLine && pref.get('signedIn', false) && G.clientId()) loadGis().catch(() => {});
+  if (navigator.onLine && pref.get('signedIn', false)) loadGis().catch(() => {});
   if (navigator.onLine && G.valid()) pushAll(false);
   renderSync();
 }

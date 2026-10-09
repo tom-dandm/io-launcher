@@ -1,4 +1,4 @@
-const CACHE = 'io-shell-6';
+const CACHE = 'io-shell-7';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
