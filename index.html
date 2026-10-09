@@ -32,6 +32,7 @@
     <button type="button" data-cmd="clear" title="Clear marks from the selection (Ctrl+\)">Clear</button>
   </div>
   <div class="bar-end">
+    <button type="button" class="sync-btn" id="booksBtn" title="Your books: switch, or start a new one">Books</button>
     <button type="button" class="sync-btn" id="openBtn" title="Open a Google Doc (Ctrl+O)">Open</button>
     <button type="button" class="sync-btn" id="syncBtn" title="Push to Google Docs (Ctrl+S)">Google Doc</button>
     <button type="button" class="icon-btn" id="menuBtn" aria-label="Settings" title="Settings">&#8943;</button>
@@ -73,13 +74,16 @@
   <form method="dialog" class="menu-in">
     <h2>Settings</h2>
 
-    <label class="row">Font
-      <select id="fontSel">
-        <option value="aptos">Aptos</option>
-        <option value="calibri">Calibri</option>
-        <option value="whitney">Whitney (if installed)</option>
-      </select>
-    </label>
+    <div class="row">Text colour
+      <div class="inks" id="inks" role="group" aria-label="Text colour">
+        <button type="button" data-ink="#1f1f1f" style="--ink:#1f1f1f" title="Black" aria-label="Black"></button>
+        <button type="button" data-ink="#4a4a4a" style="--ink:#4a4a4a" title="Grey" aria-label="Grey"></button>
+        <button type="button" data-ink="#1d3557" style="--ink:#1d3557" title="Navy" aria-label="Navy"></button>
+        <button type="button" data-ink="#4a3222" style="--ink:#4a3222" title="Brown" aria-label="Brown"></button>
+        <button type="button" data-ink="#1e4a3a" style="--ink:#1e4a3a" title="Green" aria-label="Green"></button>
+        <label class="ink-pick" title="Any colour"><input type="color" id="inkPick" aria-label="Pick any colour"></label>
+      </div>
+    </div>
 
     <h3>Google Docs</h3>
     <p class="hint">Signed in, Io keeps your book in step across your devices and copies each sheet to a Google Doc.</p>
@@ -116,6 +120,19 @@
     </dl>
 
     <div class="btns end"><button value="close">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="books" class="menu open-dlg">
+  <form method="dialog" class="menu-in">
+    <h2>Books</h2>
+    <p class="hint">Each book has its own sheets and its own Google Docs.</p>
+    <ol class="toc open-list" id="bookList"></ol>
+    <div class="btns">
+      <button type="button" id="newBookBtn">New book</button>
+      <button type="button" id="openDocBtn">Open a Google Doc</button>
+    </div>
+    <div class="btns end"><button value="close" class="plain">Close</button></div>
   </form>
 </dialog>
 

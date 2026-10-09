@@ -15,11 +15,8 @@
   --mark-remove: #c81e1e;
   --mark-fix: #6b4f00;
   --mark-fix-bg: #ffe17a;
-  --font-aptos: Aptos, Calibri, Carlito, "Segoe UI", system-ui, sans-serif;
-  --font-calibri: Calibri, Carlito, Aptos, "Segoe UI", system-ui, sans-serif;
-  --font-whitney: Whitney, "Whitney Book", Aptos, Calibri, Carlito, sans-serif;
-  --font: var(--font-aptos);
-  --ui-font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font: Aptos, Calibri, Carlito, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ui-font: var(--font);
   --text-size: 12pt;
   --heading-size: 20pt;
   --page-w: 794px;
@@ -351,6 +348,19 @@ button { cursor: pointer; }
 .doc-links a { color: var(--accent); }
 .open-list { max-height: min(420px, 55dvh); overflow-y: auto; margin-top: 10px; }
 .open-list .pg { flex: none; }
+.open-list li:has(.book-del) { display: flex; }
+.open-list li:has(.book-del) > button:first-child { flex: 1; min-width: 0; }
+.toc .book-del { flex: none; width: 32px; justify-content: center; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: 18px; }
+.toc .book-del:hover { background: var(--hover); color: var(--mark-remove); }
+.inks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inks button, .ink-pick {
+  width: 28px; height: 28px; padding: 0;
+  border: 2px solid var(--line); border-radius: 50%;
+  background: var(--ink);
+}
+.inks button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.ink-pick { position: relative; overflow: hidden; cursor: pointer; background: conic-gradient(#e53935, #fdd835, #43a047, #1e88e5, #8e24aa, #e53935); }
+.ink-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }
 .keys dt { font-weight: 600; white-space: nowrap; }
 .keys dd { margin: 0; color: var(--muted); }

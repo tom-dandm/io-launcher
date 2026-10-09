@@ -13,6 +13,7 @@ const DOCS_EVERY = 15 * 60000;
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const DATA_NAME = 'Io data.json.gz';
+const dataName = b => b.id === 'main' ? DATA_NAME : `Io data ${b.id}.json.gz`;
 const CLIENT_ID = '257581565054-a3i5pvi1akkcq2s9i7rt4jp140pdh7rm.apps.googleusercontent.com';
 
 const $ = s => document.querySelector(s);
@@ -69,6 +70,7 @@ const dirty = new Set();
 function newBook() {
   const ms = uid();
   return {
+    id: uid(),
     title: 'Untitled book',
     active: ms,
     tabs: [
@@ -83,13 +85,14 @@ const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&
 const tabById = id => book.tabs.find(t => t.id === id);
 const curTab = () => tabById(book.active);
 const curEd = () => editors[book.active];
+const bookKey = (id = book.id) => 'book:' + id;
 
 function serialize(ed) {
   return ed.innerHTML.replace(/ style="[^"]*"/g, '');
 }
 
 function saveBook() {
-  later('book', 300, () => dbPut([['book', book]]));
+  later('book', 300, () => dbPut([[bookKey(), book]]));
 }
 
 async function flush() {
@@ -105,7 +108,7 @@ async function flush() {
     entries.push(['tab:' + id, html]);
   }
   dirty.clear();
-  entries.push(['book', book]);
+  entries.push([bookKey(), book]);
   await dbPut(entries);
   renderTabs();
   renderStatus();
@@ -484,13 +487,13 @@ function startZoom() {
   return z === null ? fit : fit < 1 ? Math.min(z, fit) : z;
 }
 
-const FONTS = { aptos: 'var(--font-aptos)', calibri: 'var(--font-calibri)', whitney: 'var(--font-whitney)' };
-function setFont(f) {
-  if (!FONTS[f]) f = 'aptos';
-  document.documentElement.style.setProperty('--font', FONTS[f]);
-  pref.set('font', f);
-  $('#fontSel').value = f;
-  later('layout', 100, layout);
+const INK = '#1f1f1f';
+function setInk(c) {
+  if (!/^#[0-9a-f]{6}$/i.test(c || '')) c = INK;
+  document.documentElement.style.setProperty('--page-ink', c);
+  pref.set('ink', c);
+  $('#inkPick').value = c;
+  for (const b of document.querySelectorAll('#inks [data-ink]')) b.setAttribute('aria-pressed', b.dataset.ink.toLowerCase() === c.toLowerCase());
 }
 
 function download(name, text, type) {
@@ -531,7 +534,7 @@ async function autoDir(ask) {
 
 async function autoBackup(force = false, gesture = false) {
   if (!window.showDirectoryPicker || autoBackup.busy) return;
-  const last = pref.get('autoLast', null);
+  const last = pref.get('autoLast.' + book.id, null);
   if (!force && last && (Date.now() - last.at < AUTO_EVERY || last.sig === autoSig())) return;
   autoBackup.busy = true;
   try {
@@ -543,11 +546,11 @@ async function autoBackup(force = false, gesture = false) {
     const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
     await w.write(blob);
     await w.close();
-    pref.set('autoLast', { at: Date.now(), sig, size: blob.size, name });
+    pref.set('autoLast.' + book.id, { at: Date.now(), sig, size: blob.size, name });
     const old = [];
     for await (const [n, h] of dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz')) old.push(n);
-    old.sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
-    for (const n of old.slice(AUTO_KEEP)) await dir.removeEntry(n).catch(() => {});
+    const mine = old.filter(n => n.slice(0, -21) === name.slice(0, -21)).sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
+    for (const n of mine.slice(AUTO_KEEP)) await dir.removeEntry(n).catch(() => {});
     if (force) toast(`Backed up to ${dir.name}/${name} (${kb(blob.size)}).`);
   } catch (e) {
     if (force) toast('Backup failed: ' + e.message);
@@ -563,14 +566,14 @@ async function chooseBackupDir() {
   try {
     const dir = await showDirectoryPicker({ id: 'io-backup', mode: 'readwrite', startIn: 'documents' });
     await dbPut([['backupDir', dir]]);
-    pref.set('autoLast', null);
+    pref.set('autoLast.' + book.id, null);
     autoBackup(true, true);
   } catch (e) { if (e.name !== 'AbortError') toast(e.message); }
 }
 
 async function stopBackups() {
   await dbPut([['backupDir', undefined]]);
-  pref.set('autoLast', null);
+  pref.set('autoLast.' + book.id, null);
   renderBackup();
 }
 
@@ -578,10 +581,10 @@ async function renderBackup() {
   const box = $('#autoBackup');
   if (!window.showDirectoryPicker) { box.innerHTML = '<p class="hint">Automatic backups to a folder work in Chrome or Edge on a computer. On this device, your copy in Google is the backup.</p>'; return; }
   const dir = await dbGet('backupDir');
-  const last = pref.get('autoLast', null);
+  const last = pref.get('autoLast.' + book.id, null);
   const ok = dir && await dir.queryPermission({ mode: 'readwrite' }) === 'granted';
   $('#autoText').textContent = !dir ? 'Io can save a backup to a folder you pick (OneDrive, a USB stick) every hour while you write. One file a day, the last 30 days kept.'
-    : `Backing up to the folder "${dir.name}" every hour while you write. One file a day, the last ${AUTO_KEEP} days kept.`
+    : `Backing up to the folder "${dir.name}" every hour while you write. One file a day for each book, the last ${AUTO_KEEP} days kept.`
       + (last ? ` Last backup ${when(last.at)}, ${kb(last.size)}.` : '')
       + (ok ? '' : ' Click anywhere in Io to let it write there again.');
   $('#backupDirBtn').textContent = dir ? 'Change folder' : 'Choose backup folder';
@@ -596,12 +599,19 @@ async function restore(file) {
     data = JSON.parse(head[0] === 0x1f && head[1] === 0x8b ? await gunzip(file) : await file.text());
   } catch { return notBackup(); }
   if (!data || data.io !== 1 || !data.book?.tabs) return notBackup();
-  if (!await ask({ title: 'Restore backup?', text: `Replace everything in Io with the backup from ${when(data.savedAt)}? Download a backup of the current version first if you might want it.`, ok: 'Restore', danger: true })) return;
-  const entries = [['book', data.book]];
+  const id = data.book.id || book.id;
+  const old = id === book.id ? book : await dbGet(bookKey(id));
+  const text = old
+    ? `Replace the book "${old.title}" with the backup from ${when(data.savedAt)}? Download a backup of it first if you might want it.`
+    : `Add the book "${data.book.title}" from the backup of ${when(data.savedAt)}?`;
+  if (!await ask({ title: 'Restore backup?', text, ok: 'Restore', danger: !!old })) return;
+  const now = Date.now();
+  const entries = [[bookKey(id), { ...data.book, id, tabs: data.book.tabs.map(t => ({ ...t, rev: uid(), updatedAt: now })) }]];
   for (const t of data.book.tabs) entries.push(['tab:' + t.id, data.tabs[t.id] || '']);
-  for (const t of book.tabs) if (!data.book.tabs.some(x => x.id === t.id)) entries.push(['tab:' + t.id, undefined]);
-  dirty.clear();
+  for (const t of old?.tabs || []) if (!data.book.tabs.some(x => x.id === t.id)) entries.push(['tab:' + t.id, undefined]);
+  if (id === book.id) { dirty.clear(); clearTimeout(timers.book); }
   await dbPut(entries);
+  pref.set('bookId', id);
   location.reload();
 }
 
@@ -757,7 +767,7 @@ async function syncData() {
   await flush();
   let id = book.dataId, version = null, base = book.dataSig;
   if (!id) {
-    const q = encodeURIComponent(`name='${DATA_NAME}' and trashed=false`);
+    const q = encodeURIComponent(`name='${dataName(book)}' and trashed=false`);
     id = (await gfetch('GET', `${DRIVE}/files?q=${q}&orderBy=modifiedTime desc&fields=files(id)`)).files[0]?.id || null;
   }
   if (id) {
@@ -772,13 +782,17 @@ async function syncData() {
     const html = {};
     for (const t of book.tabs) html[t.id] = await tabHtml(t);
     const body = await gzip(JSON.stringify({ io: 1, savedAt: Date.now(), book: shareBook(), html }));
-    if (!id) id = (await gfetch('POST', `${DRIVE}/files?fields=id`, { name: DATA_NAME, mimeType: 'application/gzip' })).id;
+    if (!id) id = (await gfetch('POST', `${DRIVE}/files?fields=id`, { name: dataName(book), mimeType: 'application/gzip' })).id;
     version = (await (await gblob('PATCH', `${UPLOAD}/${id}?uploadType=media&fields=version`, body, 'application/gzip')).json()).version;
+  }
+  if (book.dataTitle !== book.title) {
+    await gfetch('PATCH', `${DRIVE}/files/${id}?fields=id`, { appProperties: { ioBook: book.id, title: book.title } });
+    book.dataTitle = book.title;
   }
   for (const t of book.tabs) t.baseRev = t.rev;
   Object.assign(book, { dataId: id, dataVersion: version, dataSig: sigOf(book), dataAt: Date.now() });
   clearTimeout(timers.book);
-  await dbPut([['book', book]]);
+  await dbPut([[bookKey(), book]]);
 }
 
 function hexRgb(h) {
@@ -1098,6 +1112,103 @@ async function openDocs() {
   listDocs('');
 }
 
+async function localBooks() {
+  const d = await idb;
+  const all = await new Promise((res, rej) => {
+    const q = d.transaction('kv').objectStore('kv').getAll(IDBKeyRange.bound('book:', 'book:\uffff'));
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => rej(q.error);
+  });
+  return all.map(b => b.id === book?.id ? book : b)
+    .map(b => ({ id: b.id, title: b.title, dataId: b.dataId, at: Math.max(0, ...b.tabs.map(t => t.updatedAt || 0)) }))
+    .sort((a, b) => b.at - a.at);
+}
+
+async function switchBook(id) {
+  if (id === book.id) return $('#books').close();
+  $('#books').close();
+  toast('Saving…');
+  await flush();
+  clearTimeout(timers.book);
+  await dbPut([[bookKey(), book]]);
+  if (G.valid() && navigator.onLine) await pushAll(false);
+  pref.set('bookId', id);
+  location.reload();
+}
+
+async function newBookCmd() {
+  const title = await ask({ title: 'New book', text: 'It gets its own sheets: Manuscript, Characters and Timeline.', value: 'Untitled book', ok: 'Create' });
+  if (!title) return;
+  const b = newBook();
+  Object.assign(b, { title, titleAt: Date.now() });
+  await dbPut([[bookKey(b.id), b]]);
+  switchBook(b.id);
+}
+
+async function openDriveBook(f, id) {
+  const b = newBook();
+  Object.assign(b, { id, title: f.appProperties?.title || 'Io book', dataId: f.id });
+  await dbPut([[bookKey(id), b]]);
+  switchBook(id);
+}
+
+async function deleteBook(b) {
+  const text = b.dataId
+    ? `Delete "${b.title}" from this device? Its copy in Google Drive and its Google Docs stay, and it can be opened again from this list.`
+    : `Delete "${b.title}"? It was never saved to Google, so this cannot be undone. Download a backup first if you might want it.`;
+  if (!await ask({ title: 'Delete book?', text, ok: 'Delete', danger: true })) return;
+  const full = await dbGet(bookKey(b.id));
+  await dbPut([[bookKey(b.id), undefined], ...(full?.tabs || []).map(t => ['tab:' + t.id, undefined])]);
+  openBooks();
+}
+
+function bookRow(label, note, onOpen, onDelete) {
+  const li = document.createElement('li');
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.innerHTML = '<span class="t"></span><span class="pg"></span>';
+  b.firstChild.textContent = label;
+  b.lastChild.textContent = note;
+  b.addEventListener('click', onOpen);
+  li.append(b);
+  if (onDelete) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'book-del';
+    x.textContent = '×';
+    x.title = 'Delete ' + label;
+    x.setAttribute('aria-label', x.title);
+    x.addEventListener('click', onDelete);
+    li.append(x);
+  }
+  return li;
+}
+
+let booksSeq = 0;
+async function renderBooks() {
+  const list = $('#bookList'), seq = ++booksSeq;
+  const mine = await localBooks();
+  const f = document.createDocumentFragment();
+  for (const b of mine) f.append(bookRow(b.title, b.id === book.id ? 'open now' : b.at ? when(b.at) : 'new', () => switchBook(b.id), b.id !== book.id && (() => deleteBook(b))));
+  list.replaceChildren(f);
+  if (!G.valid() || !navigator.onLine) return;
+  try {
+    const q = encodeURIComponent(`name contains 'Io data' and trashed=false`);
+    const r = await gfetch('GET', `${DRIVE}/files?q=${q}&orderBy=modifiedTime desc&fields=files(id,name,appProperties,modifiedTime)`);
+    if (seq !== booksSeq) return;
+    for (const d of r.files) {
+      const id = d.appProperties?.ioBook || (d.name === DATA_NAME ? 'main' : null);
+      if (!id || mine.some(b => b.id === id || b.dataId === d.id)) continue;
+      list.append(bookRow(d.appProperties?.title || 'Io book', 'on Google Drive', () => openDriveBook(d, id)));
+    }
+  } catch {}
+}
+
+function openBooks() {
+  renderBooks();
+  if (!$('#books').open) $('#books').showModal();
+}
+
 function ask({ title, text = '', value = null, ok = 'OK', cancel = 'Cancel', danger = false }) {
   const d = $('#ask'), inp = $('#askInput'), okb = $('#askOk'), cb = $('#askCancel');
   $('#askTitle').textContent = title;
@@ -1203,6 +1314,9 @@ function wire() {
 
   el.syncBtn.addEventListener('click', () => pushAll(true));
   $('#openBtn').addEventListener('click', openDocs);
+  $('#booksBtn').addEventListener('click', openBooks);
+  $('#newBookBtn').addEventListener('click', () => { $('#books').close(); newBookCmd(); });
+  $('#openDocBtn').addEventListener('click', () => { $('#books').close(); openDocs(); });
   $('#openQ').addEventListener('input', e => later('openq', 300, () => listDocs(e.target.value.trim())));
   $('#openQ').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
   el.stSync.addEventListener('click', () => {
@@ -1212,7 +1326,8 @@ function wire() {
   document.addEventListener('click', renewOnClick, true);
   $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ask').close('ok'); } });
   $('#menuBtn').addEventListener('click', openMenu);
-  $('#fontSel').addEventListener('change', e => setFont(e.target.value));
+  $('#inks').addEventListener('click', e => { const b = e.target.closest('[data-ink]'); if (b) setInk(b.dataset.ink); });
+  $('#inkPick').addEventListener('input', e => setInk(e.target.value));
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
   $('#pushBtn').addEventListener('click', () => pushAll(true));
@@ -1231,7 +1346,7 @@ function wire() {
     layout();
   }));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { clearTimeout(timers.book); dbPut([['book', book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
+    if (document.hidden) { clearTimeout(timers.book); dbPut([[bookKey(), book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
     else { pushAll(false); autoBackup(); }
   });
   addEventListener('pagehide', flush);
@@ -1266,11 +1381,23 @@ function singleWindow() {
 async function init() {
   document.execCommand('defaultParagraphSeparator', false, 'p');
   document.execCommand('styleWithCSS', false, false);
-  book = (await dbGet('book')) || newBook();
+  book = await dbGet(bookKey(pref.get('bookId', 'main')));
+  const old = await dbGet('book');
+  if (old && await dbGet(bookKey('main'))) await dbPut([['book', undefined]]);
+  else if (old && !book) {
+    book = { ...old, id: 'main' };
+    await dbPut([[bookKey(), book], ['book', undefined]]);
+  }
+  if (!book) {
+    const first = (await localBooks())[0];
+    book = first && await dbGet(bookKey(first.id));
+  }
+  if (!book) { book = { ...newBook(), id: 'main' }; await dbPut([[bookKey(), book]]); }
+  pref.set('bookId', book.id);
   if (!tabById(book.active)) book.active = book.tabs[0].id;
   el.title.value = book.title;
   document.title = book.title + ' - Io';
-  setFont(pref.get('font', 'aptos'));
+  setInk(pref.get('ink', INK));
   if (pref.get('navHidden', false)) el.shell.classList.add('nav-hidden');
   setZoom(startZoom(), false, false);
   wire();
