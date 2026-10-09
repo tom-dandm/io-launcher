@@ -184,6 +184,13 @@ button { cursor: pointer; }
 .toc .on button { background: var(--pressed); font-weight: 600; }
 .toc .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toc .pg { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.toc li:has(.ch-sel) { display: flex; }
+.toc li:has(.ch-sel) > button:first-child { flex: 1; min-width: 0; }
+.toc .ch-sel { flex: none; width: auto; padding: 5px 6px; color: var(--muted); font-size: 12px; opacity: 0; }
+.toc li:hover .ch-sel, .toc .ch-sel:focus-visible, .toc .on .ch-sel { opacity: 1; }
+.toc .ch-sel:hover { color: var(--accent); }
+.toc .on .ch-sel { font-weight: 400; }
+@media (hover: none) { .toc .ch-sel { opacity: 1; } }
 .toc .empty { padding: 4px 8px; color: var(--muted); font-size: 13px; }
 
 .scroller {
@@ -352,13 +359,21 @@ button { cursor: pointer; }
 .open-list li:has(.book-del) > button:first-child { flex: 1; min-width: 0; }
 .toc .book-del { flex: none; width: 32px; justify-content: center; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: 18px; }
 .toc .book-del:hover { background: var(--hover); color: var(--mark-remove); }
-.inks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.inks button, .ink-pick {
+.color-btn span { display: inline-block; padding: 0 2px; font-weight: 600; border-bottom: 3px solid; border-image: linear-gradient(90deg, #d32f2f, #e65100, #2e7d32, #1565c0, #6a1b9a) 1; }
+.color-pop {
+  position: fixed; z-index: 20;
+  display: grid; grid-template-columns: repeat(6, 28px); gap: 8px;
+  padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
+}
+.color-pop[hidden] { display: none; }
+.color-pop button, .ink-pick {
   width: 28px; height: 28px; padding: 0;
   border: 2px solid var(--line); border-radius: 50%;
   background: var(--ink);
 }
-.inks button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.color-pop .color-auto { grid-column: 1 / -1; width: auto; height: 30px; border-radius: 4px; background: var(--page); color: var(--page-ink); font-size: 13px; }
+.color-pop button:hover, .ink-pick:hover { border-color: var(--accent); }
 .ink-pick { position: relative; overflow: hidden; cursor: pointer; background: conic-gradient(#e53935, #fdd835, #43a047, #1e88e5, #8e24aa, #e53935); }
 .ink-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }

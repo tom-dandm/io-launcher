@@ -123,7 +123,7 @@ async function openTab(id) {
     ed = document.createElement('div');
     ed.className = 'editor' + (t.kind === 'ms' ? ' ms' : '');
     ed.contentEditable = 'true';
-    ed.spellcheck = true;
+    ed.spellcheck = pref.get('spell', false);
     ed.setAttribute('role', 'textbox');
     ed.setAttribute('aria-multiline', 'true');
     ed.setAttribute('aria-label', t.name);
@@ -200,7 +200,7 @@ function keepRange() {
 
 function selectWordAt(sel) {
   const n = sel.anchorNode, o = sel.anchorOffset;
-  const f = markAt(sel) && n.parentNode.closest?.('font');
+  const f = markFont(sel);
   const r = document.createRange();
   if (f) r.selectNodeContents(f);
   else {
@@ -218,7 +218,7 @@ function selectWordAt(sel) {
   return true;
 }
 
-function run(c) {
+function run(c, v) {
   const ed = curEd();
   if (!ed) return;
   const sel = getSelection();
@@ -238,6 +238,10 @@ function run(c) {
       if (markAt(sel) === c) clearMarks();
       else document.execCommand('foreColor', false, MARKS[c]);
       break;
+    case 'color':
+      document.execCommand('foreColor', false, v || INK);
+      if (!v) unwrapInk(ed);
+      break;
     case 'clear':
       clearMarks(); break;
   }
@@ -250,14 +254,24 @@ function markOf(font) {
   return null;
 }
 
-function markAt(sel) {
+function markFont(sel) {
   let n = sel.anchorNode;
   const ed = curEd();
   while (n && n !== ed) {
-    if (n.nodeName === 'FONT') return markOf(n);
+    if (n.nodeName === 'FONT' && markOf(n)) return n;
     n = n.parentNode;
   }
   return null;
+}
+const markAt = sel => { const f = markFont(sel); return f && markOf(f); };
+
+const INK = '#1f1f1f';
+const inkOf = font => {
+  const c = (font.getAttribute('color') || '').toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(c) && c !== INK && !markOf(font) ? c : null;
+};
+function unwrapInk(ed) {
+  for (const f of ed.querySelectorAll('font')) if (!markOf(f) && !inkOf(f)) f.replaceWith(...f.childNodes);
 }
 
 function clearMarks() {
@@ -271,7 +285,8 @@ function clearMarks() {
   x.setEndAfter(hit[hit.length - 1]);
   sel.removeAllRanges();
   sel.addRange(x);
-  document.execCommand('foreColor', false, getComputedStyle(ed).color);
+  document.execCommand('foreColor', false, INK);
+  unwrapInk(ed);
 }
 
 function updateTools() {
@@ -322,7 +337,13 @@ function renderToc() {
     b.dataset.i = i;
     b.innerHTML = '<span class="t"></span>';
     b.firstChild.textContent = h.text;
-    li.append(b);
+    const all = document.createElement('button');
+    all.type = 'button';
+    all.className = 'ch-sel';
+    all.dataset.i = i;
+    all.textContent = 'Select';
+    all.title = 'Select the whole chapter';
+    li.append(b, all);
     f.append(li);
   });
   if (!heads.length) {
@@ -359,12 +380,21 @@ function onScroll() {
   });
 }
 
+let totalWords = 0;
+const countWords = t => (t.match(/[^\s—–-]+/g) || []).length;
+function renderWords() {
+  const ed = curEd(), sel = getSelection(), fmt = n => n.toLocaleString('en-GB');
+  const picked = ed && sel.rangeCount && !sel.isCollapsed && ed.contains(sel.anchorNode) ? countWords(sel.toString()) : 0;
+  el.stWords.textContent = picked ? `${fmt(picked)} of ${fmt(totalWords)} words` : fmt(totalWords) + (totalWords === 1 ? ' word' : ' words');
+}
+
 function meta() {
   const ed = curEd(), t = curTab();
   if (!ed) return;
   let words = 0;
   for (const b of ed.children) words += ((b.querySelector('br') ? b.innerText : b.textContent).match(/[^\s—–-]+/g) || []).length;
-  el.stWords.textContent = words.toLocaleString('en-GB') + (words === 1 ? ' word' : ' words');
+  totalWords = words;
+  renderWords();
   const fixes = [...ed.querySelectorAll('font')].filter(f => markOf(f) === 'fix');
   t.fixes = fixes.length;
   el.fixCount.textContent = fixes.length;
@@ -402,6 +432,24 @@ function goTo(node, select, center) {
   const s = getSelection();
   s.removeAllRanges();
   s.addRange(r);
+}
+
+function selectChapter(i) {
+  const { heads } = layoutInfo, ed = curEd();
+  goTo(heads[i].el, false);
+  const next = heads[i + 1]?.el;
+  const r = document.createRange();
+  r.setStartBefore(heads[i].el);
+  if (next) r.setEndBefore(next); else r.setEndAfter(ed.lastChild);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+function setSpell(on) {
+  pref.set('spell', on);
+  for (const ed of Object.values(editors)) ed.spellcheck = on;
+  $('#spellBtn').setAttribute('aria-pressed', on);
 }
 
 function flash(n) {
@@ -487,14 +535,6 @@ function startZoom() {
   return z === null ? fit : fit < 1 ? Math.min(z, fit) : z;
 }
 
-const INK = '#1f1f1f';
-function setInk(c) {
-  if (!/^#[0-9a-f]{6}$/i.test(c || '')) c = INK;
-  document.documentElement.style.setProperty('--page-ink', c);
-  pref.set('ink', c);
-  $('#inkPick').value = c;
-  for (const b of document.querySelectorAll('#inks [data-ink]')) b.setAttribute('aria-pressed', b.dataset.ink.toLowerCase() === c.toLowerCase());
-}
 
 function download(name, text, type) {
   const a = document.createElement('a');
@@ -659,8 +699,9 @@ async function signIn(scope = wantScope()) {
         try { localStorage.setItem('io.token', JSON.stringify({ token: G.token, exp: G.exp, scope: G.scope })); } catch {}
         pref.set('signedIn', true);
         renderSync();
+        renderAccount();
         res();
-        if (!pref.get('googleEmail', '')) gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => pref.set('googleEmail', a.user.emailAddress), () => {});
+        if (!pref.get('googleEmail', '')) gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => { pref.set('googleEmail', a.user.emailAddress); renderAccount(); }, () => {});
       },
       error_callback: e => rej(new Error(e.message || 'Sign-in was closed.')),
     });
@@ -806,8 +847,8 @@ function docModel(root) {
     const start = text.length;
     text += s;
     const last = runs[runs.length - 1];
-    if (last && last.end === start && last.b === st.b && last.i === st.i && last.u === st.u && last.m === st.m) last.end = text.length;
-    else if (st.b || st.i || st.u || st.m) runs.push({ start, end: text.length, ...st });
+    if (last && last.end === start && last.b === st.b && last.i === st.i && last.u === st.u && last.m === st.m && last.c === st.c) last.end = text.length;
+    else if (st.b || st.i || st.u || st.m || st.c) runs.push({ start, end: text.length, ...st });
   };
   const walk = (node, st) => {
     for (const n of node.childNodes) {
@@ -818,13 +859,13 @@ function docModel(root) {
       if (n.nodeName === 'B' || n.nodeName === 'STRONG') s.b = true;
       else if (n.nodeName === 'I' || n.nodeName === 'EM') s.i = true;
       else if (n.nodeName === 'U') s.u = true;
-      else if (n.nodeName === 'FONT') s.m = markOf(n) || st.m;
+      else if (n.nodeName === 'FONT') { s.m = markOf(n) || st.m; s.c = inkOf(n) || st.c; }
       walk(n, s);
     }
   };
   for (const b of root.children) {
     const start = text.length;
-    walk(b, { b: false, i: false, u: false, m: null });
+    walk(b, { b: false, i: false, u: false, m: null, c: null });
     text += '\n';
     paras.push({ start, end: text.length, h: b.nodeName === 'H1' });
   }
@@ -853,6 +894,7 @@ function docRequests(m, docEnd, linked) {
       fields.push('foregroundColor');
       if (r.m === 'fix') { ts.backgroundColor = { color: { rgbColor: FIX_BG } }; fields.push('backgroundColor'); }
     }
+    else if (r.c) { ts.foregroundColor = { color: { rgbColor: hexRgb(r.c) } }; fields.push('foregroundColor'); }
     reqs.push({ updateTextStyle: { range: { startIndex: r.start + 1, endIndex: r.end + 1 }, textStyle: ts, fields: fields.join(',') } });
   }
   return reqs;
@@ -907,7 +949,7 @@ async function pushAll(interactive) {
     await syncData();
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
     const todo = docsDue ? book.tabs.filter(t => needsPush(t) && (interactive || !t.conflict) && (!t.linked || hasDocs())) : [];
-    if (interactive && !hasDocs() && book.tabs.some(t => t.linked && needsPush(t))) toast('Sign in to Google again (Settings) to save the Docs you opened from Google.');
+    if (interactive && !hasDocs() && book.tabs.some(t => t.linked && needsPush(t))) toast('Allow access to your Google Docs (Settings) to save the Docs you opened from Google.');
     if (todo.length) {
       for (const t of todo) await pushTab(t, interactive);
       book.docsAt = Date.now();
@@ -1006,7 +1048,9 @@ function docHtml(doc) {
       if (ts.italic) x = `<i>${x}</i>`;
       if (ts.bold) x = `<b>${x}</b>`;
       const m = markFromStyle(ts);
+      const fg = !m && hexOf(ts.foregroundColor);
       if (m) x = `<font color="${MARKS[m]}">${x}</font>`;
+      else if (fg && fg !== '#000000' && fg !== INK) x = `<font color="${fg}">${x}</font>`;
       html += x;
     }
     const tag = h ? 'h1' : 'p';
@@ -1235,7 +1279,17 @@ function toast(msg) {
   later('toast', 4000, () => { if (!el.banner.dataset.sticky) el.banner.hidden = true; });
 }
 
+function renderAccount() {
+  const on = G.valid(), was = pref.get('signedIn', false), who = pref.get('googleEmail', '');
+  const more = wantScope() === SCOPE_DOCS && !hasDocs();
+  const b = $('#connectBtn');
+  b.hidden = on && !more;
+  b.textContent = on ? 'Allow access to your Google Docs' : was ? 'Sign in to Google again' : 'Sign in to Google';
+  $('#gWho').textContent = on ? 'Signed in' + (who ? ' as ' + who : '') + '.' : was ? 'Google sign-in has expired.' : 'Not signed in.';
+}
+
 function openMenu() {
+  renderAccount();
   $('#autoPush').checked = pref.get('autoPush', true);
   renderDocLinks();
   renderBackup();
@@ -1245,13 +1299,14 @@ function openMenu() {
 function wire() {
   el.tools.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
   el.tools.addEventListener('click', e => { const b = e.target.closest('[data-cmd]'); if (b) run(b.dataset.cmd); });
-  document.addEventListener('selectionchange', () => { keepRange(); later('tools', 80, updateTools); });
+  document.addEventListener('selectionchange', () => { keepRange(); later('tools', 80, () => { updateTools(); renderWords(); }); });
   el.scroller.addEventListener('scroll', onScroll, { passive: true });
 
   el.toc.addEventListener('click', e => {
     const b = e.target.closest('button');
     const h = b && layoutInfo.heads[b.dataset.i];
-    if (h) { goTo(h.el, false); closeNavOnPhone(); }
+    if (h && b.classList.contains('ch-sel')) { selectChapter(+b.dataset.i); closeNavOnPhone(); }
+    else if (h) { goTo(h.el, false); closeNavOnPhone(); }
   });
   el.fixes.addEventListener('click', e => {
     const b = e.target.closest('button');
@@ -1326,8 +1381,23 @@ function wire() {
   document.addEventListener('click', renewOnClick, true);
   $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ask').close('ok'); } });
   $('#menuBtn').addEventListener('click', openMenu);
-  $('#inks').addEventListener('click', e => { const b = e.target.closest('[data-ink]'); if (b) setInk(b.dataset.ink); });
-  $('#inkPick').addEventListener('input', e => setInk(e.target.value));
+  $('#spellBtn').addEventListener('click', () => setSpell(!pref.get('spell', false)));
+  const pop = $('#colorPop'), cbtn = $('#colorBtn');
+  const showColors = on => {
+    pop.hidden = !on;
+    cbtn.setAttribute('aria-expanded', on);
+    if (!on) return;
+    const r = cbtn.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
+    pop.style.top = r.bottom + 4 + 'px';
+  };
+  const paint = c => { showColors(false); run('color', c); };
+  cbtn.addEventListener('click', () => showColors(pop.hidden));
+  pop.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
+  pop.addEventListener('click', e => { const b = e.target.closest('[data-color]'); if (b) paint(b.dataset.color); });
+  $('#colorPick').addEventListener('change', e => paint(e.target.value));
+  document.addEventListener('pointerdown', e => { if (!pop.hidden && !pop.contains(e.target) && !cbtn.contains(e.target)) showColors(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) showColors(false); });
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
   $('#pushBtn').addEventListener('click', () => pushAll(true));
@@ -1397,7 +1467,7 @@ async function init() {
   if (!tabById(book.active)) book.active = book.tabs[0].id;
   el.title.value = book.title;
   document.title = book.title + ' - Io';
-  setInk(pref.get('ink', INK));
+  setSpell(pref.get('spell', false));
   if (pref.get('navHidden', false)) el.shell.classList.add('nav-hidden');
   setZoom(startZoom(), false, false);
   wire();
