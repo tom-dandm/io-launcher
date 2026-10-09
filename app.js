@@ -185,6 +185,9 @@ function onKey(e) {
   let c = null;
   if (e.altKey && !e.shiftKey && e.code === 'Digit1') c = 'heading';
   else if (e.altKey && !e.shiftKey && e.code === 'Digit0') c = 'body';
+  else if (e.altKey && !e.shiftKey && e.code === 'KeyR') c = 'red';
+  else if (e.altKey && !e.shiftKey && e.code === 'KeyG') c = 'green';
+  else if (e.altKey && !e.shiftKey && e.code === 'KeyB') c = 'blue';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyE') c = 'edit';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyX') c = 'remove';
   else if (e.shiftKey && !e.altKey && e.code === 'KeyF') c = 'fix';
@@ -238,6 +241,9 @@ function run(c, v) {
       if (markAt(sel) === c) clearMarks();
       else document.execCommand('foreColor', false, MARKS[c]);
       break;
+    case 'red': case 'green': case 'blue':
+      v = inkAt(sel) === COLORS[c] ? '' : COLORS[c];
+    // falls through
     case 'color':
       document.execCommand('foreColor', false, v || INK);
       if (!v) unwrapInk(ed);
@@ -266,10 +272,15 @@ function markFont(sel) {
 const markAt = sel => { const f = markFont(sel); return f && markOf(f); };
 
 const INK = '#1f1f1f';
+const COLORS = { red: '#a4262c', green: '#1e6b34', blue: '#1e3a8a' };
 const inkOf = font => {
   const c = (font.getAttribute('color') || '').toLowerCase();
   return /^#[0-9a-f]{6}$/.test(c) && c !== INK && !markOf(font) ? c : null;
 };
+function inkAt(sel) {
+  for (let n = sel.anchorNode, ed = curEd(); n && n !== ed; n = n.parentNode) if (n.nodeName === 'FONT' && inkOf(n)) return inkOf(n);
+  return null;
+}
 function unwrapInk(ed) {
   for (const f of ed.querySelectorAll('font')) if (!markOf(f) && !inkOf(f)) f.replaceWith(...f.childNodes);
 }
@@ -1391,11 +1402,10 @@ function wire() {
     pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
     pop.style.top = r.bottom + 4 + 'px';
   };
-  const paint = c => { showColors(false); run('color', c); };
+  const paint = c => { showColors(false); c ? run(c) : run('color', ''); };
   cbtn.addEventListener('click', () => showColors(pop.hidden));
   pop.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
   pop.addEventListener('click', e => { const b = e.target.closest('[data-color]'); if (b) paint(b.dataset.color); });
-  $('#colorPick').addEventListener('change', e => paint(e.target.value));
   document.addEventListener('pointerdown', e => { if (!pop.hidden && !pop.contains(e.target) && !cbtn.contains(e.target)) showColors(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) showColors(false); });
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));

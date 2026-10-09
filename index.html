@@ -25,7 +25,7 @@
     <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
     <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><i>I</i></button>
     <button type="button" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline"><u>U</u></button>
-    <button type="button" id="colorBtn" class="color-btn" title="Text colour" aria-label="Text colour" aria-haspopup="true" aria-expanded="false" aria-controls="colorPop"><span>A</span></button>
+    <button type="button" id="colorBtn" class="color-btn" title="Text colour (Ctrl+Alt+R, G or B)" aria-label="Text colour" aria-haspopup="true" aria-expanded="false" aria-controls="colorPop"><span>A</span></button>
     <span class="sep" aria-hidden="true"></span>
     <button type="button" data-cmd="edit" class="mk mk-edit" title="Mark as needs editing (Ctrl+Shift+E)">Edit</button>
     <button type="button" data-cmd="remove" class="mk mk-remove" title="Mark as to remove (Ctrl+Shift+X)">Remove</button>
@@ -74,18 +74,10 @@
 <div class="banner" id="banner" hidden></div>
 
 <div class="color-pop" id="colorPop" role="group" aria-label="Text colour" hidden>
-  <button type="button" data-color="" class="color-auto" title="Default colour">Default</button>
-  <button type="button" data-color="#6b6b6b" style="--ink:#6b6b6b" title="Grey" aria-label="Grey"></button>
-  <button type="button" data-color="#d32f2f" style="--ink:#d32f2f" title="Red" aria-label="Red"></button>
-  <button type="button" data-color="#e65100" style="--ink:#e65100" title="Orange" aria-label="Orange"></button>
-  <button type="button" data-color="#b8860b" style="--ink:#b8860b" title="Gold" aria-label="Gold"></button>
-  <button type="button" data-color="#2e7d32" style="--ink:#2e7d32" title="Green" aria-label="Green"></button>
-  <button type="button" data-color="#00838f" style="--ink:#00838f" title="Teal" aria-label="Teal"></button>
-  <button type="button" data-color="#1565c0" style="--ink:#1565c0" title="Blue" aria-label="Blue"></button>
-  <button type="button" data-color="#6a1b9a" style="--ink:#6a1b9a" title="Purple" aria-label="Purple"></button>
-  <button type="button" data-color="#ad1457" style="--ink:#ad1457" title="Pink" aria-label="Pink"></button>
-  <button type="button" data-color="#6d4c41" style="--ink:#6d4c41" title="Brown" aria-label="Brown"></button>
-  <label class="ink-pick" title="Any colour"><input type="color" id="colorPick" value="#1f1f1f" aria-label="Pick any colour"></label>
+  <button type="button" data-color="" class="color-auto" title="Default colour (press the colour's shortcut again)">Default</button>
+  <button type="button" data-color="red" style="--ink:#a4262c" title="Red (Ctrl+Alt+R)" aria-label="Red"></button>
+  <button type="button" data-color="green" style="--ink:#1e6b34" title="Green (Ctrl+Alt+G)" aria-label="Green"></button>
+  <button type="button" data-color="blue" style="--ink:#1e3a8a" title="Blue (Ctrl+Alt+B)" aria-label="Blue"></button>
 </div>
 
 <dialog id="menu" class="menu">
@@ -120,7 +112,8 @@
     <dl class="keys">
       <dt>Ctrl+Alt+1 / Ctrl+Alt+0</dt><dd>Chapter heading / body text</dd>
       <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this! (with nothing selected, tags the word at the cursor)</dd>
-      <dt>Ctrl+\</dt><dd>Clear marks</dd>
+      <dt>Ctrl+Alt+R / G / B</dt><dd>Red / green / blue text (press again for the default colour)</dd>
+      <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
       <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
