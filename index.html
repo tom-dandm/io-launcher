@@ -41,9 +41,8 @@
     </div>
     <button type="button" class="sync-btn" id="readBtn" title="Reading mode (Ctrl+Alt+R)">Read</button>
     <button type="button" class="sync-btn" id="booksBtn" title="Your books: switch, or start a new one">Books</button>
-    <button type="button" class="sync-btn" id="openBtn" title="Open a Google Doc (Ctrl+O)">Open</button>
-    <button type="button" class="sync-btn" id="syncBtn" title="Push to Google Docs (Ctrl+S)">Google Doc</button>
-    <button type="button" class="icon-btn" id="menuBtn" aria-label="Settings" title="Settings">&#8943;</button>
+    <button type="button" class="sync-btn" id="syncBtn" title="Save to Google Docs (Ctrl+S)">Google Doc</button>
+    <button type="button" class="icon-btn" id="menuBtn" aria-label="Menu" title="Settings" aria-haspopup="true">&#8943;</button>
   </div>
 </header>
 
@@ -97,19 +96,55 @@
   </div>
 </div>
 
+<div class="sel-pop" id="selPop" role="toolbar" aria-label="Selection" hidden>
+  <div class="sel-row">
+    <button type="button" data-cmd="fix" class="mk mk-fix">Fix this!</button>
+    <button type="button" data-cmd="edit" class="mk mk-edit">Edit</button>
+    <button type="button" data-cmd="remove" class="mk mk-remove">Remove</button>
+    <button type="button" data-cmd="clear">Clear</button>
+  </div>
+  <div class="sel-row sel-fmt">
+    <button type="button" data-cmd="bold" aria-label="Bold"><b>B</b></button>
+    <button type="button" data-cmd="italic" aria-label="Italic"><i>I</i></button>
+    <button type="button" data-cmd="underline" aria-label="Underline"><u>U</u></button>
+    <button type="button" data-cmd="chapter" title="Make this a chapter heading, or body text again">Chapter</button>
+    <button type="button" data-cmd="red" class="dot" style="--ink:#a4262c" aria-label="Red text"></button>
+    <button type="button" data-cmd="green" class="dot" style="--ink:#1e6b34" aria-label="Green text"></button>
+    <button type="button" data-cmd="blue" class="dot" style="--ink:#1e3a8a" aria-label="Blue text"></button>
+  </div>
+</div>
+
+<div class="pop-menu" id="morePop" role="menu" aria-label="Menu" hidden>
+  <button type="button" role="menuitem" id="mRead">Read</button>
+  <button type="button" role="menuitem" id="mBooks">Books</button>
+  <button type="button" role="menuitem" id="mSync" class="m-sync">Google Doc</button>
+  <button type="button" role="menuitem" id="mSpell" aria-pressed="false">Spelling</button>
+  <button type="button" role="menuitem" id="mSettings">Settings</button>
+</div>
+
+<div class="pop-menu" id="tabPop" role="menu" aria-label="Sheet" hidden>
+  <button type="button" role="menuitem" id="tabRename">Rename</button>
+  <button type="button" role="menuitem" id="tabDelete" class="danger">Delete sheet</button>
+</div>
+
 <dialog id="menu" class="menu">
   <form method="dialog" class="menu-in">
     <h2>Settings</h2>
 
     <h3>Google Docs</h3>
-    <p class="hint">Signed in, Io keeps your book in step across your devices and copies each sheet to a Google Doc.</p>
+    <p class="hint">Signed in, Io keeps your book in step across your devices and copies it to one Google Doc, one Doc tab per sheet.</p>
     <p class="hint" id="gWho"></p>
     <label class="check"><input type="checkbox" id="autoPush"> Save to Google automatically (every 2 minutes after a change; Google Docs at most every 15)</label>
     <div class="btns">
       <button type="button" id="connectBtn">Sign in to Google</button>
-      <button type="button" id="pushBtn">Push now</button>
+      <button type="button" id="pushBtn">Save to Google now</button>
     </div>
     <ul class="doc-links" id="docLinks"></ul>
+    <div class="btns"><button type="button" id="reloadBtn" class="plain" hidden title="Replace Io's sheets with the Doc's tabs, to take edits made in Google">Load from Google Doc</button></div>
+    <div id="oldDocs" hidden>
+      <p class="hint" id="oldDocsText"></p>
+      <div class="btns"><button type="button" id="oldDocsBtn" class="plain">Move old Docs to the bin</button></div>
+    </div>
 
     <h3>Backup</h3>
     <div id="autoBackup">
@@ -132,10 +167,10 @@
       <dt>F1 / F2 / F3</dt><dd>Red / green / blue text (press again for the default colour)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
       <dt>Ctrl+Alt+R</dt><dd>Reading mode (Esc goes back to writing; Space / Shift+Space turn the page)</dd>
-      <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
+      <dt>Ctrl+S</dt><dd>Save to Google Docs</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
-      <dt>Double-click a sheet tab</dt><dd>Rename it</dd>
+      <dt>&#9662; on a sheet tab, or right-click it</dt><dd>Rename or delete the sheet (double-click also renames)</dd>
     </dl>
 
     <div class="btns end"><button value="close">Done</button></div>
@@ -145,7 +180,7 @@
 <dialog id="books" class="menu open-dlg">
   <form method="dialog" class="menu-in">
     <h2>Books</h2>
-    <p class="hint">Each book has its own sheets and its own Google Docs.</p>
+    <p class="hint">Each book has its own sheets and its own Google Doc, one Doc tab per sheet.</p>
     <ol class="toc open-list" id="bookList"></ol>
     <div class="btns">
       <button type="button" id="newBookBtn">New book</button>
@@ -158,7 +193,7 @@
 <dialog id="open" class="menu open-dlg">
   <form method="dialog" class="menu-in">
     <h2>Open a Google Doc</h2>
-    <p class="hint">It opens as a new sheet. Edit it here; Ctrl+S saves it back to the same Doc.</p>
+    <p class="hint">It opens as a new book, one sheet per Doc tab. Edit it here; Ctrl+S saves it back to the same Doc.</p>
     <input id="openQ" class="ask-input" type="search" placeholder="Search by name" spellcheck="false" autocomplete="off" aria-label="Search your Google Docs">
     <ol class="toc open-list" id="openList"></ol>
     <div class="btns end"><button value="close" class="plain">Close</button></div>

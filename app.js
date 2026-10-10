@@ -243,6 +243,8 @@ function run(c, v) {
       document.execCommand('formatBlock', false, 'h1'); break;
     case 'body':
       document.execCommand('formatBlock', false, 'p'); break;
+    case 'chapter':
+      document.execCommand('formatBlock', false, blockAt(sel)?.nodeName === 'H1' ? 'p' : 'h1'); break;
     case 'edit': case 'remove': case 'fix':
       if (sel.isCollapsed && !selectWordAt(sel)) return;
       if (markAt(sel) === c) clearMarks();
@@ -259,6 +261,14 @@ function run(c, v) {
       clearMarks(); break;
   }
   updateTools();
+  renderSelPop();
+}
+
+function blockAt(sel) {
+  let n = sel.anchorNode;
+  const ed = curEd();
+  while (n && n.parentNode !== ed) n = n.parentNode;
+  return n;
 }
 
 function markOf(font) {
@@ -310,21 +320,48 @@ function clearMarks() {
 function updateTools() {
   const ed = curEd(), sel = getSelection();
   if (!ed || !sel.rangeCount || !ed.contains(sel.anchorNode)) return;
-  let n = sel.anchorNode;
-  while (n && n.parentNode !== ed) n = n.parentNode;
-  const h = n && n.nodeName === 'H1';
-  const m = markAt(sel);
+  const h = blockAt(sel)?.nodeName === 'H1';
+  const m = markAt(sel), ink = inkAt(sel);
   const on = {
-    heading: h, body: !h,
+    heading: h, body: !h, chapter: h,
+    red: ink === COLORS.red, green: ink === COLORS.green, blue: ink === COLORS.blue,
     bold: document.queryCommandState('bold'),
     italic: document.queryCommandState('italic'),
     underline: document.queryCommandState('underline'),
     edit: m === 'edit', remove: m === 'remove', fix: m === 'fix',
   };
-  for (const b of el.tools.querySelectorAll('[data-cmd]')) {
+  for (const b of document.querySelectorAll('#tools [data-cmd], #selPop [data-cmd]')) {
     if (b.dataset.cmd in on) b.setAttribute('aria-pressed', on[b.dataset.cmd] ? 'true' : 'false');
   }
 }
+
+// Touch only: Io's own menu for a selection, in place of the phone's Cut / Copy / Paste bar.
+let touchy = false;
+function renderSelPop() {
+  const p = $('#selPop'), sel = getSelection(), ed = curEd();
+  const on = touchy && ed && sel.rangeCount && ed.contains(sel.anchorNode) && (!sel.isCollapsed || reading()) && !document.querySelector('dialog[open]');
+  const rects = on ? sel.getRangeAt(0).getClientRects() : [];
+  const vv = window.visualViewport || { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
+  const first = rects[0], last = rects[rects.length - 1];
+  if (!first || last.bottom < vv.offsetTop || first.top > vv.offsetTop + vv.height) { p.hidden = true; return; }
+  p.classList.toggle('marks-only', reading());
+  p.hidden = false;
+  const w = p.offsetWidth, h = p.offsetHeight, gap = 30;
+  let top = last.bottom + gap;
+  if (top + h > vv.offsetTop + vv.height - 8) top = Math.max(vv.offsetTop + 8, first.top - h - gap);
+  p.style.left = Math.max(vv.offsetLeft + 8, Math.min(first.left, vv.offsetLeft + vv.width - w - 8)) + 'px';
+  p.style.top = top + 'px';
+}
+
+function showPop(p, anchor) {
+  hidePops();
+  p.hidden = false;
+  const r = anchor.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
+  p.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+  p.style.top = (r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - h - 4) : r.bottom + 4) + 'px';
+}
+function hidePops() { for (const p of document.querySelectorAll('.pop-menu')) p.hidden = true; }
+const phone = () => matchMedia('(max-width: 600px)').matches;
 
 function layout() {
   const ed = curEd();
@@ -496,6 +533,7 @@ function setReading(on) {
   pref.set('reading', on);
   $('#colorPop').hidden = true;
   $('#readPop').hidden = true;
+  renderSelPop();
 }
 
 function setReadTheme(t) {
@@ -515,6 +553,7 @@ function setSpell(on) {
   pref.set('spell', on);
   for (const ed of Object.values(editors)) ed.spellcheck = on && !reading();
   $('#spellBtn').setAttribute('aria-pressed', on);
+  $('#mSpell').setAttribute('aria-pressed', on);
 }
 
 function flash(n) {
@@ -542,12 +581,12 @@ function renderTabs() {
       s.title = t.fixes + ' Fix this! tags';
       b.append(s);
     }
-    if (t.kind !== 'ms' && t.id === book.active) {
+    if (t.id === book.active) {
       const x = document.createElement('span');
       x.className = 'x';
-      x.dataset.del = t.id;
-      x.textContent = '×';
-      x.title = 'Delete this sheet';
+      x.dataset.menu = t.id;
+      x.textContent = '▾';
+      x.title = 'Rename or delete this sheet';
       b.append(x);
     }
     f.append(b);
@@ -754,7 +793,7 @@ function loadGis() {
   });
 }
 
-const wantScope = () => pref.get('docsAccess', false) || book.tabs.some(t => t.linked) ? SCOPE_DOCS : SCOPE;
+const wantScope = () => pref.get('docsAccess', false) || book.linked ? SCOPE_DOCS : SCOPE;
 const hasDocs = () => G.valid() && SCOPE_DOCS.split(' ').every(x => (G.scope || '').split(' ').includes(x));
 
 async function signIn(scope = wantScope()) {
@@ -854,12 +893,15 @@ const pack = async (key, head, fallback) => {
   return inBackground({ key, head, ids, fallback: fb });
 };
 
-const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt', 'linked'];
+const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docTab', 'tabTitle', 'syncedAt', 'pushedAt'];
+const DOC_KEYS = ['docId', 'docTitle', 'revisionId', 'pushedAt', 'linked'];
+const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));
 const shareBook = () => ({
-  title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {},
-  tabs: book.tabs.map(t => Object.fromEntries(SHARED.map(k => [k, t[k] ?? null]))),
+  title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {}, dropTabs: book.dropTabs || [],
+  ...pick(book, DOC_KEYS),
+  tabs: book.tabs.map(t => pick(t, SHARED)),
 });
-const sigOf = b => JSON.stringify([b.title, Object.keys(b.deleted || {}).sort(), b.tabs.map(t => [t.id, t.rev || null, t.name, t.pushedAt || 0])]);
+const sigOf = b => JSON.stringify([b.title, Object.keys(b.deleted || {}).sort(), b.docId || null, b.pushedAt || 0, b.dropTabs || [], b.tabs.map(t => [t.id, t.rev || null, t.name, t.pushedAt || 0])]);
 const tabHtml = async t => editors[t.id] ? serialize(editors[t.id]) : (await dbGet('tab:' + t.id)) || starter(t);
 
 async function mergeData(remote) {
@@ -872,13 +914,14 @@ async function mergeData(remote) {
     book.tabs = book.tabs.filter(t => t.id !== id);
     puts.push(['tab:' + id, undefined]);
   };
-  if (!book.dataSig) for (const t of [...book.tabs]) if (!t.rev && !t.docId) drop(t.id);
+  if (!book.dataSig) for (const t of [...book.tabs]) if (!t.rev && !t.docTab) drop(t.id);
+  const fresh = { linked: null, docTab: null, tabTitle: null, syncedAt: 0, pushedAt: 0, baseRev: null };
   book.deleted = { ...rb.deleted, ...book.deleted };
   for (const id in book.deleted) {
     const t = tabById(id);
     if (!t) continue;
     if (t.rev === t.baseRev) { drop(id); continue; }
-    const html = await tabHtml(t), c = { ...t, id: uid(), name: t.name + ' (deleted on other device)', linked: null, docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
+    const html = await tabHtml(t), c = { ...t, ...fresh, id: uid(), name: t.name + ' (deleted on other device)' };
     drop(id);
     book.tabs.push(c);
     puts.push(['tab:' + c.id, html]);
@@ -889,13 +932,16 @@ async function mergeData(remote) {
     el.title.value = book.title;
     document.title = book.title + ' - Io';
   }
-  for (const r of rb.tabs) {
-    if (book.deleted[r.id]) continue;
+  if ((rb.pushedAt || 0) > (book.pushedAt || 0)) Object.assign(book, pick(rb, DOC_KEYS));
+  book.dropTabs = [...new Set([...(book.dropTabs || []), ...(rb.dropTabs || [])])];
+  for (const r0 of rb.tabs) {
+    if (book.deleted[r0.id]) continue;
+    const r = pick(r0, SHARED);
     const html = remote.html[r.id] ?? '';
     const t = tabById(r.id);
     if (!t) {
       const name = book.tabs.some(x => x.name === r.name) ? r.name + ' (other device)' : r.name;
-      book.tabs.push({ ...r, name, baseRev: r.rev });
+      book.tabs.push({ ...r, name, kind: r.kind === 'ms' && book.tabs.some(x => x.kind === 'ms') ? 'notes' : r.kind, baseRev: r.rev });
       puts.push(['tab:' + r.id, html]);
       continue;
     }
@@ -905,12 +951,12 @@ async function mergeData(remote) {
       puts.push(['tab:' + t.id, html]);
       if (editors[t.id]) { editors[t.id].innerHTML = html || starter(t); shown ||= t.id === book.active; }
     } else if (theirs) {
-      const c = { ...r, id: uid(), kind: 'notes', name: r.name + ' (other device)', linked: null, docId: null, docTitle: null, revisionId: null, syncedAt: 0, pushedAt: 0, baseRev: null };
+      const c = { ...r, ...fresh, id: uid(), kind: 'notes', name: r.name + ' (other device)' };
       book.tabs.push(c);
       puts.push(['tab:' + c.id, html]);
     }
     if ((r.nameAt || 0) > (t.nameAt || 0)) { t.name = r.name; t.nameAt = r.nameAt; }
-    if ((r.pushedAt || 0) > (t.pushedAt || 0)) for (const k of ['docId', 'docTitle', 'revisionId', 'syncedAt', 'pushedAt', 'linked']) t[k] = r[k];
+    if ((r.pushedAt || 0) > (t.pushedAt || 0)) for (const k of ['docTab', 'tabTitle', 'syncedAt', 'pushedAt']) t[k] = r[k];
   }
   if (!book.tabs.length) book.tabs = newBook().tabs;
   await dbPut(puts);
@@ -934,8 +980,11 @@ async function syncData() {
     const remote = JSON.parse(await gunzip(await (await gblob('GET', `${DRIVE}/files/${id}?alt=media`)).blob()));
     if (remote?.io === 1) { await mergeData(remote); base = sigOf(remote.book); }
   }
-  if (!id || sigOf(book) !== base) {
-    const head = { io: 1, savedAt: Date.now(), book: shareBook() };
+  const snap = shareBook();
+  let sent = null;
+  if (!id || sigOf(snap) !== base) {
+    const head = { io: 1, savedAt: Date.now(), book: snap };
+    sent = snap;
     let body = (await pack('html', head, starter))?.blob;
     if (!body) {
       const html = {};
@@ -949,8 +998,10 @@ async function syncData() {
     await gfetch('PATCH', `${DRIVE}/files/${id}?fields=id`, { appProperties: { ioBook: book.id, title: book.title } });
     book.dataTitle = book.title;
   }
-  for (const t of book.tabs) t.baseRev = t.rev;
-  Object.assign(book, { dataId: id, dataVersion: version, dataSig: sigOf(book), dataAt: Date.now() });
+  // Revs as they were when packed: an edit typed while the upload ran still counts as unsent.
+  const revs = new Map(snap.tabs.map(t => [t.id, t.rev]));
+  for (const t of book.tabs) if (revs.has(t.id)) t.baseRev = revs.get(t.id);
+  Object.assign(book, { dataId: id, dataVersion: version, dataSig: sent ? sigOf(sent) : base, dataAt: Date.now() });
   clearTimeout(timers.book);
   await dbPut([[bookKey(), book]]);
 }
@@ -991,18 +1042,18 @@ function docModel(root) {
   return { text, paras, runs };
 }
 
-function docRequests(m, docEnd, linked) {
-  const reqs = [];
-  if (docEnd - 1 > 1) reqs.push({ deleteContentRange: { range: { startIndex: 1, endIndex: docEnd - 1 } } });
+function docRequests(m, docEnd, tabId, clean) {
+  const reqs = [], at = (startIndex, endIndex) => ({ startIndex, endIndex, tabId });
+  if (docEnd - 1 > 1) reqs.push({ deleteContentRange: { range: at(1, docEnd - 1) } });
   const ins = m.text.slice(0, -1);
   const L = ins.length;
-  if (L) reqs.push({ insertText: { location: { index: 1 }, text: ins } });
-  reqs.push({ updateParagraphStyle: { range: { startIndex: 1, endIndex: L + 2 }, paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
-  if (linked) reqs.push({ deleteParagraphBullets: { range: { startIndex: 1, endIndex: L + 2 } } });
+  if (L) reqs.push({ insertText: { location: { index: 1, tabId }, text: ins } });
+  reqs.push({ updateParagraphStyle: { range: at(1, L + 2), paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
+  if (clean) reqs.push({ deleteParagraphBullets: { range: at(1, L + 2) } });
   for (const p of m.paras) {
-    if (p.h) reqs.push({ updateParagraphStyle: { range: { startIndex: p.start + 1, endIndex: p.end + 1 }, paragraphStyle: { namedStyleType: 'HEADING_1' }, fields: 'namedStyleType' } });
+    if (p.h) reqs.push({ updateParagraphStyle: { range: at(p.start + 1, p.end + 1), paragraphStyle: { namedStyleType: 'HEADING_1' }, fields: 'namedStyleType' } });
   }
-  if (L) reqs.push({ updateTextStyle: { range: { startIndex: 1, endIndex: L + 1 }, textStyle: {}, fields: 'bold,italic,underline,foregroundColor,backgroundColor' } });
+  if (L) reqs.push({ updateTextStyle: { range: at(1, L + 1), textStyle: {}, fields: 'bold,italic,underline,foregroundColor,backgroundColor' } });
   for (const r of m.runs) {
     const ts = {}, fields = [];
     if (r.b) { ts.bold = true; fields.push('bold'); }
@@ -1014,51 +1065,92 @@ function docRequests(m, docEnd, linked) {
       if (r.m === 'fix') { ts.backgroundColor = { color: { rgbColor: FIX_BG } }; fields.push('backgroundColor'); }
     }
     else if (r.c) { ts.foregroundColor = { color: { rgbColor: hexRgb(r.c) } }; fields.push('foregroundColor'); }
-    reqs.push({ updateTextStyle: { range: { startIndex: r.start + 1, endIndex: r.end + 1 }, textStyle: ts, fields: fields.join(',') } });
+    reqs.push({ updateTextStyle: { range: at(r.start + 1, r.end + 1), textStyle: ts, fields: fields.join(',') } });
   }
   return reqs;
 }
 
-const docTitle = t => t.linked ? t.docTitle : `${book.title} - ${t.name}`;
-const needsPush = t => !t.docId || t.updatedAt > t.syncedAt || t.docTitle !== docTitle(t);
+// One Google Doc per book, one Doc tab per sheet (sheet.docTab is the Doc's tabId).
+const docName = () => book.linked ? book.docTitle : book.title;
+const tabNeeds = t => !t.docTab || t.updatedAt > (t.syncedAt || 0) || t.tabTitle !== t.name;
+const needsDoc = () => !book.docId || book.tabs.some(tabNeeds) || !!book.dropTabs?.length || book.docTitle !== docName();
 
-async function pushTab(t, interactive) {
+const TAB_FIELDS = 'tabProperties(tabId,title),documentTab(body(content(endIndex)))';
+const flatTabs = ts => (ts || []).flatMap(t => [t, ...flatTabs(t.childTabs)]);
+const getDoc = (id, fields = `revisionId,tabs(${TAB_FIELDS},childTabs(${TAB_FIELDS},childTabs(${TAB_FIELDS})))`) =>
+  gfetch('GET', `${DOCS}/${id}?includeTabsContent=true&fields=${encodeURIComponent(fields)}`);
+
+async function findDoc() {
+  const q = encodeURIComponent(`appProperties has { key='ioDoc' and value='${book.id}' } and trashed=false`);
+  return (await gfetch('GET', `${DRIVE}/files?q=${q}&fields=files(id,name)`)).files[0] || null;
+}
+
+async function pushDoc(interactive) {
   const snapAt = Date.now();
-  const html = editors[t.id] ? serialize(editors[t.id]) : (await dbGet('tab:' + t.id)) || starter(t);
-  const tpl = document.createElement('template');
-  tpl.innerHTML = html;
-  const m = docModel(tpl.content);
-  let doc = null;
-  if (t.docId) {
-    try { doc = await gfetch('GET', `${DOCS}/${t.docId}?fields=revisionId,body(content(endIndex))`); }
-    catch (e) { if (e.status === 404) { t.docId = null; t.linked = null; } else throw e; }
+  let doc = null, made = false;
+  if (!book.docId && !book.linked) book.docId = (await findDoc())?.id || null;
+  if (book.docId) {
+    try { doc = await getDoc(book.docId); }
+    catch (e) { if (e.status !== 404) throw e; book.docId = null; book.revisionId = null; }
   }
-  if (doc && t.revisionId && doc.revisionId !== t.revisionId) {
-    if (!interactive) { t.conflict = true; return; }
-    if (!await ask({ title: 'Changed in Google Docs', text: `"${docTitle(t)}" was changed in Google Docs since Io last pushed it. Push anyway? Google keeps the changed version in its version history.`, ok: 'Push anyway', danger: true })) return;
+  if (doc && book.revisionId && doc.revisionId !== book.revisionId) {
+    if (!interactive) { book.conflict = true; return; }
+    if (!await ask({ title: 'Changed in Google Docs', text: `"${docName()}" was changed in Google Docs since Io last saved it. Overwrite it with Io's version? Google keeps the changed version in its version history. To take the changes instead, use Load from Google in Settings.`, ok: 'Overwrite', danger: true })) return;
   }
   if (!doc) {
-    const d = await gfetch('POST', DOCS, { title: docTitle(t) });
-    t.docId = d.documentId;
-    t.docTitle = docTitle(t);
-    doc = { body: { content: [{ endIndex: 2 }] } };
+    book.linked = false;
+    const d = await gfetch('POST', DOCS, { title: book.title });
+    book.docId = d.documentId;
+    book.docTitle = book.title;
+    await gfetch('PATCH', `${DRIVE}/files/${book.docId}?fields=id`, { appProperties: { ioDoc: book.id } });
+    for (const t of book.tabs) t.docTab = null;
+    doc = await getDoc(book.docId);
+    made = true;
   }
-  if (t.docTitle !== docTitle(t)) {
-    await gfetch('PATCH', `https://www.googleapis.com/drive/v3/files/${t.docId}?fields=id`, { name: docTitle(t) });
-    t.docTitle = docTitle(t);
+  if (book.docTitle !== docName()) {
+    await gfetch('PATCH', `${DRIVE}/files/${book.docId}?fields=id`, { name: book.title });
+    book.docTitle = book.title;
+    if (book.revisionId) book.revisionId = (await getDoc(book.docId, 'revisionId')).revisionId;
   }
-  const content = doc.body.content || [];
-  const end = content.length ? content[content.length - 1].endIndex : 2;
-  const res = await gfetch('POST', `${DOCS}/${t.docId}:batchUpdate`, { requests: docRequests(m, end, t.linked) });
-  t.revisionId = res.writeControl?.requiredRevisionId || null;
-  t.syncedAt = snapAt;
-  t.pushedAt = Date.now();
-  t.conflict = false;
+  const have = new Map(flatTabs(doc.tabs).map(t => [t.tabProperties.tabId, {
+    title: t.tabProperties.title, end: (c => c.length ? c[c.length - 1].endIndex : 2)(t.documentTab?.body?.content || []),
+  }]));
+  for (const t of book.tabs) if (t.docTab && !have.has(t.docTab)) t.docTab = null;
+  // A new Doc comes with one empty tab: the first sheet takes it.
+  if (made) { const spare = [...have.keys()].find(id => !book.tabs.some(t => t.docTab === id)), t = book.tabs.find(x => !x.docTab); if (spare && t) t.docTab = spare; }
+  const adds = book.tabs.filter(t => !t.docTab);
+  const reqs = adds.map(t => ({ addDocumentTab: { tabProperties: { title: t.name } } }));
+  for (const t of book.tabs) {
+    if (t.docTab && have.get(t.docTab).title !== t.name) reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.docTab, title: t.name }, fields: 'title' } });
+  }
+  for (const id of book.dropTabs || []) if (have.has(id) && !book.tabs.some(t => t.docTab === id)) reqs.push({ deleteTab: { tabId: id } });
+  const write = async requests => {
+    const r = await gfetch('POST', `${DOCS}/${book.docId}:batchUpdate`, { requests });
+    book.revisionId = r.writeControl?.requiredRevisionId || null;
+    return r;
+  };
+  if (reqs.length) {
+    const r = await write(reqs);
+    adds.forEach((t, i) => { t.docTab = r.replies[i].addDocumentTab.tabProperties.tabId; have.set(t.docTab, { title: t.name, end: 2 }); t.syncedAt = 0; });
+  } else if (!book.revisionId) book.revisionId = doc.revisionId;
+  book.dropTabs = [];
+  for (const t of book.tabs) {
+    if (t.updatedAt > (t.syncedAt || 0) || !t.pushedAt) {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = await tabHtml(t);
+      await write(docRequests(docModel(tpl.content), have.get(t.docTab).end, t.docTab, book.linked));
+      t.syncedAt = snapAt;
+    }
+    t.tabTitle = t.name;
+    t.pushedAt = Date.now();
+  }
+  book.pushedAt = Date.now();
+  book.conflict = false;
 }
 
 async function pushAll(interactive) {
   if (G.busy) return;
-  if (!navigator.onLine) { if (interactive) toast('Offline. Io will push when you are back online.'); return; }
+  if (!navigator.onLine) { if (interactive) toast('Offline. Io will save to Google when you are back online.'); return; }
   if (!interactive && !G.valid()) return renderSync();
   G.busy = true;
   renderSync();
@@ -1067,13 +1159,13 @@ async function pushAll(interactive) {
     if (!G.valid()) await signIn();
     await syncData();
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
-    const todo = docsDue ? book.tabs.filter(t => needsPush(t) && (interactive || !t.conflict) && (!t.linked || hasDocs())) : [];
-    if (interactive && !hasDocs() && book.tabs.some(t => t.linked && needsPush(t))) toast('Allow access to your Google Docs (Settings) to save the Docs you opened from Google.');
-    if (todo.length) {
-      for (const t of todo) await pushTab(t, interactive);
+    if (book.linked && !hasDocs()) { if (interactive) toast('Allow access to your Google Docs (Settings) to save this book back to its Doc.'); }
+    else if (docsDue && needsDoc() && (interactive || !book.conflict)) {
+      await pushDoc(interactive);
       book.docsAt = Date.now();
       await syncData();
-    } else if (interactive) toast('Saved to Google. Google Docs are up to date.');
+      if (interactive && !book.conflict) toast('Saved to Google.');
+    } else if (interactive) toast('Saved to Google. The Google Doc is up to date.');
     G.error = null;
   } catch (e) {
     G.error = e.message;
@@ -1088,45 +1180,76 @@ async function pushAll(interactive) {
 
 function renderSync() {
   const b = el.syncBtn;
-  const tabs = book.tabs;
-  const waiting = tabs.filter(needsPush).length;
-  const conflict = tabs.some(t => t.conflict);
-  const last = Math.max(0, ...tabs.map(t => t.pushedAt || 0));
+  const waiting = book.tabs.filter(tabNeeds).length;
+  const conflict = book.conflict;
+  const last = book.pushedAt || 0;
   let label, state, note = '';
-  if (G.busy) { label = 'Pushing…'; state = 'pending'; }
+  if (G.busy) { label = 'Saving…'; state = 'pending'; }
   else if (G.error || conflict) {
-    label = 'Push to Google'; state = 'warn';
-    note = conflict ? 'Changed in Google Docs. Press Push to overwrite.' : G.error;
+    label = 'Save to Google'; state = 'warn';
+    note = conflict ? 'Changed in Google Docs. Press Save to overwrite.' : G.error;
   }
-  else if (!G.valid() && pref.get('signedIn', false)) { label = 'Sign in to push'; state = waiting ? 'pending' : ''; }
-  else if (waiting) { label = 'Push to Google'; state = 'pending'; }
+  else if (!G.valid() && pref.get('signedIn', false)) { label = 'Sign in to save'; state = waiting ? 'pending' : ''; }
+  else if (waiting) { label = 'Save to Google'; state = 'pending'; }
   else { label = 'Google Doc'; state = 'ok'; }
   b.textContent = label;
   b.dataset.state = state;
-  if (!note && !G.valid() && !G.busy) note =pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
+  $('#mSync').textContent = label;
+  $('#mSync').dataset.state = state;
+  $('#menuBtn').dataset.state = state === 'ok' ? '' : state;
+  if (!note && !G.valid() && !G.busy) note = pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
   const warn = !!note;
-  if (!navigator.onLine) note = 'Offline. Saved on this computer.';
-  const lastTxt = book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Pushed ' + when(last) : '';
+  if (!navigator.onLine) note = 'Offline. Saved on this device.';
+  const lastTxt = book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Saved ' + when(last) : '';
   el.stSync.textContent = note || lastTxt;
   el.stSync.className = warn && navigator.onLine ? 'st-sync warn' : 'st-sync';
-  b.title = [lastTxt || 'Not pushed yet', waiting ? waiting + ' sheet(s) waiting' : ''].filter(Boolean).join('. ');
+  b.title = [lastTxt || 'Not saved to Google yet', waiting ? waiting + ' sheet(s) waiting' : ''].filter(Boolean).join('. ');
 }
 
 function renderDocLinks() {
   const f = document.createDocumentFragment();
-  for (const t of book.tabs) {
-    if (!t.docId) continue;
+  if (book.docId) {
     const li = document.createElement('li');
     const a = document.createElement('a');
-    a.href = `https://docs.google.com/document/d/${t.docId}/edit`;
+    a.href = `https://docs.google.com/document/d/${book.docId}/edit`;
     a.target = '_blank';
     a.rel = 'noopener';
-    a.textContent = docTitle(t);
-    li.append(a);
-    if (t.pushedAt) li.append(' (pushed ' + when(t.pushedAt) + ')');
+    a.textContent = docName();
+    li.append(a, ` (${book.tabs.length} tab${book.tabs.length === 1 ? '' : 's'}${book.pushedAt ? ', saved ' + when(book.pushedAt) : ''})`);
     f.append(li);
   }
   $('#docLinks').replaceChildren(f);
+  $('#reloadBtn').hidden = !book.docId;
+  const old = book.oldDocs || [];
+  $('#oldDocs').hidden = !old.length;
+  $('#oldDocsText').textContent = `Before Io used Doc tabs, it made one Google Doc per sheet. ${old.length} of them are still in your Drive, no longer updated.`;
+}
+
+async function trashOldDocs() {
+  const old = book.oldDocs || [];
+  if (!await ask({ title: 'Move old Docs to the bin?', text: `Move ${old.length} old Google Doc${old.length === 1 ? '' : 's'} (${old.map(d => d.title).join(', ')}) to the Drive bin? Google keeps binned files for 30 days.`, ok: 'Move to bin', danger: true })) return;
+  try {
+    if (!G.valid()) await signIn();
+    for (const d of old) await gfetch('PATCH', `${DRIVE}/files/${d.id}?fields=id`, { trashed: true }).catch(e => { if (e.status !== 404 && e.status !== 403) throw e; });
+    book.oldDocs = [];
+    saveBook();
+    renderDocLinks();
+    toast('Old Docs moved to the bin.');
+  } catch (e) { toast('Could not move them: ' + e.message); }
+}
+
+// Old books had one Doc per sheet (sheet.docId). Those Docs stop being updated; the book gets one Doc with tabs.
+function migrateDocs() {
+  if (book.docVer === 2) return;
+  const old = book.tabs.filter(t => t.docId && !t.linked).map(t => ({ id: t.docId, title: t.docTitle || t.name }));
+  if (old.length) book.oldDocs = [...(book.oldDocs || []), ...old];
+  for (const t of book.tabs) {
+    for (const k of ['docId', 'docTitle', 'revisionId', 'linked', 'conflict']) delete t[k];
+    t.syncedAt = 0;
+    t.pushedAt = 0;
+  }
+  book.docVer = 2;
+  saveBook();
 }
 
 function hexOf(c) {
@@ -1140,13 +1263,9 @@ function markFromStyle(ts) {
   return null;
 }
 
-function docHtml(doc) {
-  const tabs = [], lost = {};
-  const note = k => { lost[k] = (lost[k] || 0) + 1; };
-  const allTabs = ts => { for (const t of ts || []) { tabs.push(t); allTabs(t.childTabs); } };
-  allTabs(doc.tabs);
-  if (tabs.length > 1) lost.tabs = tabs.length - 1;
+function docHtml(content, lost) {
   const out = [];
+  const note = k => { lost[k] = (lost[k] || 0) + 1; };
   const para = p => {
     const st = p.paragraphStyle?.namedStyleType || 'NORMAL_TEXT';
     const h = st === 'TITLE' || st.startsWith('HEADING_');
@@ -1182,54 +1301,76 @@ function docHtml(doc) {
       else if (c.tableOfContents) note('toc');
     }
   };
-  walk((tabs[0]?.documentTab || doc).body?.content);
-  return { html: out.join('') || '<p><br></p>', lost };
+  walk(content);
+  return out.join('') || '<p><br></p>';
+}
+
+// Every tab of a Doc, flattened, as { tabId, title, html }.
+function docSheets(doc, lost) {
+  return flatTabs(doc.tabs).map(t => ({ tabId: t.tabProperties.tabId, title: t.tabProperties.title || 'Untitled', html: docHtml(t.documentTab?.body?.content, lost) }));
 }
 
 const LOST = {
-  tabs: 'its other tabs (Io opens the first tab only)', table: 'tables (their text comes in as plain paragraphs)',
+  table: 'tables (their text comes in as plain paragraphs)',
   image: 'pictures', list: 'list bullets', sub: 'subheadings and titles (they become chapter headings)',
   link: 'links', footnote: 'footnotes', toc: 'the table of contents',
 };
+const fullDoc = id => gfetch('GET', `${DOCS}/${id}?includeTabsContent=true&suggestionsViewMode=PREVIEW_WITHOUT_SUGGESTIONS`);
 
 async function openDocFile(f) {
   try {
-    const doc = await gfetch('GET', `${DOCS}/${f.id}?includeTabsContent=true&suggestionsViewMode=PREVIEW_WITHOUT_SUGGESTIONS`);
-    const { html, lost } = docHtml(doc);
-    const t = book.tabs.find(x => x.docId === f.id);
-    if (t) {
-      if (t.id !== book.active) await openTab(t.id);
-      if (!t.linked) return;
-      if (!await ask({ title: 'Already open', text: `"${t.name}" is this Doc. Load it again from Google? Edits made in Io since it was last saved to Google will be lost.`, ok: 'Load from Google', cancel: 'Keep Io\'s version', danger: true })) return;
-      Object.assign(t, { rev: uid(), updatedAt: Date.now(), syncedAt: Date.now(), revisionId: doc.revisionId, conflict: false });
-      if (editors[t.id]) editors[t.id].innerHTML = html;
-      else await dbPut([['tab:' + t.id, html]]);
-      dirty.add(t.id);
-      await flush();
-      layout();
-      meta();
-      renderSync();
-      return toast('Loaded from Google.');
-    }
+    const mine = (await localBooks()).find(b => b.docId === f.id);
+    if (mine && mine.id !== book.id) return switchBook(mine.id);
+    if (mine) return reloadFromDoc();
+    const doc = await fullDoc(f.id), lost = {};
+    const sheets = docSheets(doc, lost);
     const kinds = Object.keys(lost);
     if (kinds.length && !await ask({
       title: 'Some of this Doc will not come across',
-      text: `Io cannot show ${kinds.map(k => LOST[k]).join(', ')}. Saving from Io rewrites the whole Doc, so these would be removed from it. Google keeps the old version in its version history. Open it anyway?`,
+      text: `Io cannot show ${kinds.map(k => LOST[k]).join(', ')}. Saving from Io rewrites the Doc, so these would be removed from it. Google keeps the old version in its version history. Open it anyway?`,
       ok: 'Open', danger: true,
     })) return;
     const now = Date.now();
-    const name = doc.title.slice(0, 60) || 'Untitled';
-    const n = {
-      id: uid(), name: book.tabs.some(x => x.name === name) ? name + ' (Google)' : name, kind: 'notes', linked: true, rev: uid(), updatedAt: now, nameAt: now,
-      docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, syncedAt: now, pushedAt: now, fixes: 0,
+    const tabs = sheets.map((s, i) => ({
+      id: uid(), name: s.title.slice(0, 60), kind: i ? 'notes' : 'ms', rev: uid(), updatedAt: now, nameAt: now, fixes: 0,
+      docTab: s.tabId, tabTitle: s.title.slice(0, 60), syncedAt: now, pushedAt: now,
+    }));
+    const b = {
+      id: uid(), title: doc.title.slice(0, 80) || 'Untitled', titleAt: now, active: tabs[0].id, tabs, docVer: 2,
+      linked: true, docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, pushedAt: now,
     };
-    book.tabs.push(n);
-    await dbPut([['tab:' + n.id, html]]);
-    await openTab(n.id);
-    renderSync();
-    toast(`Opened "${doc.title}". Ctrl+S saves it back to the Doc.`);
+    await dbPut([[bookKey(b.id), b], ...tabs.map((t, i) => ['tab:' + t.id, sheets[i].html])]);
+    toast(`Opened "${doc.title}" as a new book, ${tabs.length} sheet${tabs.length === 1 ? '' : 's'}.`);
+    switchBook(b.id);
   } catch (e) {
     toast('Could not open the Doc: ' + e.message);
+  }
+}
+
+// Takes the Google Doc's version of every tab: matching sheets are replaced, new tabs become sheets.
+async function reloadFromDoc() {
+  if (!book.docId) return;
+  if (!await ask({ title: 'Load from Google?', text: `Replace this book's sheets with what is in "${docName()}" now? Edits made in Io since it was last saved to Google will be lost. Sheets with no tab in the Doc stay.`, ok: 'Load from Google', danger: true })) return;
+  try {
+    if (!G.valid() || book.linked && !hasDocs()) await signIn(book.linked ? SCOPE_DOCS : wantScope());
+    await flush();
+    const doc = await fullDoc(book.docId), now = Date.now(), puts = [];
+    for (const s of docSheets(doc, {})) {
+      let t = book.tabs.find(x => x.docTab === s.tabId);
+      if (!t) { t = { id: uid(), kind: 'notes', fixes: 0, docTab: s.tabId }; book.tabs.push(t); }
+      Object.assign(t, { name: s.title.slice(0, 60), tabTitle: s.title.slice(0, 60), nameAt: now, rev: uid(), updatedAt: now, syncedAt: now, pushedAt: now });
+      puts.push(['tab:' + t.id, s.html]);
+      editors[t.id]?.remove();
+      delete editors[t.id];
+    }
+    Object.assign(book, { revisionId: doc.revisionId, conflict: false, pushedAt: now });
+    await dbPut([...puts, [bookKey(), book]]);
+    await openTab(book.active);
+    renderSync();
+    renderDocLinks();
+    toast('Loaded from Google.');
+  } catch (e) {
+    toast('Could not load the Doc: ' + e.message);
   }
 }
 
@@ -1242,16 +1383,17 @@ async function listDocs(q) {
   if (q) query += ` and name contains '${q.replace(/[\\']/g, '\\$&')}'`;
   try {
     const r = await gfetch('GET', `${DRIVE}/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&pageSize=100&fields=files(id,name,modifiedTime)`);
+    const mine = await localBooks();
     if (seq !== listSeq) return;
     const f = document.createDocumentFragment();
     for (const d of r.files) {
-      const t = book.tabs.find(x => x.docId === d.id);
+      const t = mine.find(x => x.docId === d.id);
       const li = document.createElement('li');
       const b = document.createElement('button');
       b.type = 'button';
       b.innerHTML = '<span class="t"></span><span class="pg"></span>';
       b.firstChild.textContent = d.name;
-      b.lastChild.textContent = t ? (t.linked ? 'open in Io' : 'Io copy of ' + t.name) : when(Date.parse(d.modifiedTime));
+      b.lastChild.textContent = t ? (t.id === book.id ? 'open now' : 'Io book') : when(Date.parse(d.modifiedTime));
       b.addEventListener('click', () => { $('#open').close(); openDocFile(d); });
       li.append(b);
       f.append(li);
@@ -1283,7 +1425,7 @@ async function localBooks() {
     q.onerror = () => rej(q.error);
   });
   return all.map(b => b.id === book?.id ? book : b)
-    .map(b => ({ id: b.id, title: b.title, dataId: b.dataId, at: Math.max(0, ...b.tabs.map(t => t.updatedAt || 0)) }))
+    .map(b => ({ id: b.id, title: b.title, dataId: b.dataId, docId: b.docId, at: Math.max(0, ...b.tabs.map(t => t.updatedAt || 0)) }))
     .sort((a, b) => b.at - a.at);
 }
 
@@ -1317,7 +1459,7 @@ async function openDriveBook(f, id) {
 
 async function deleteBook(b) {
   const text = b.dataId
-    ? `Delete "${b.title}" from this device? Its copy in Google Drive and its Google Docs stay, and it can be opened again from this list.`
+    ? `Delete "${b.title}" from this device? Its copy in Google Drive and its Google Doc stay, and it can be opened again from this list.`
     : `Delete "${b.title}"? It was never saved to Google, so this cannot be undone. Download a backup first if you might want it.`;
   if (!await ask({ title: 'Delete book?', text, ok: 'Delete', danger: true })) return;
   const full = await dbGet(bookKey(b.id));
@@ -1418,8 +1560,24 @@ function openMenu() {
 function wire() {
   el.tools.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
   el.tools.addEventListener('click', e => { const b = e.target.closest('[data-cmd]'); if (b) run(b.dataset.cmd); });
-  document.addEventListener('selectionchange', () => { keepRange(); later('tools', 80, () => { updateTools(); renderWords(); }); });
+  document.addEventListener('selectionchange', () => { keepRange(); later('tools', 80, () => { updateTools(); renderWords(); renderSelPop(); }); });
   el.scroller.addEventListener('scroll', onScroll, { passive: true });
+  el.scroller.addEventListener('scroll', () => { if (!$('#selPop').hidden) later('selpop', 50, renderSelPop); }, { passive: true });
+  window.visualViewport?.addEventListener('resize', () => later('selpop', 50, renderSelPop));
+  document.addEventListener('pointerdown', e => { touchy = e.pointerType !== 'mouse'; }, true);
+  el.stage.addEventListener('contextmenu', e => { if (touchy) e.preventDefault(); });
+  const selPop = $('#selPop');
+  for (const t of ['pointerdown', 'mousedown']) selPop.addEventListener(t, e => { if (e.target.closest('button')) e.preventDefault(); });
+  selPop.addEventListener('click', e => { const b = e.target.closest('[data-cmd]'); if (b) run(b.dataset.cmd); });
+  document.addEventListener('pointerdown', e => { if (!e.target.closest('.pop-menu, [data-menu], #menuBtn')) hidePops(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePops(); });
+  const more = $('#morePop');
+  more.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    hidePops();
+    ({ mRead: () => setReading(!reading()), mBooks: openBooks, mSync: () => pushAll(true), mSpell: () => setSpell(!pref.get('spell', false)), mSettings: openMenu })[b.id]?.();
+  });
 
   el.toc.addEventListener('click', e => {
     const b = e.target.closest('button');
@@ -1466,19 +1624,18 @@ function wire() {
     else { el.shell.classList.toggle('nav-hidden'); if (!reading()) pref.set('navHidden', el.shell.classList.contains('nav-hidden')); later('layout', 50, layout); }
   });
 
-  el.tabs.addEventListener('click', async e => {
-    const del = e.target.closest('[data-del]');
-    if (del) return deleteTab(del.dataset.del);
+  const tabPop = $('#tabPop');
+  const tabMenu = (id, anchor) => { tabPop.dataset.id = id; showPop(tabPop, anchor); };
+  el.tabs.addEventListener('click', e => {
+    const m = e.target.closest('[data-menu]');
+    if (m) return tabMenu(m.dataset.menu, m);
     const b = e.target.closest('.tab');
     if (b && b.dataset.id !== book.active) openTab(b.dataset.id);
   });
-  el.tabs.addEventListener('dblclick', async e => {
-    const b = e.target.closest('.tab');
-    if (!b) return;
-    const t = tabById(b.dataset.id);
-    const name = await ask({ title: 'Rename sheet', value: t.name, ok: 'Rename' });
-    if (name) { t.name = name.slice(0, 60); t.nameAt = Date.now(); editors[t.id]?.setAttribute('aria-label', t.name); saveBook(); renderTabs(); renderSync(); }
-  });
+  el.tabs.addEventListener('dblclick', e => { const b = e.target.closest('.tab'); if (b && !e.target.closest('[data-menu]')) renameTab(b.dataset.id); });
+  el.tabs.addEventListener('contextmenu', e => { const b = e.target.closest('.tab'); if (b) { e.preventDefault(); tabMenu(b.dataset.id, b); } });
+  $('#tabRename').addEventListener('click', () => { hidePops(); renameTab(tabPop.dataset.id); });
+  $('#tabDelete').addEventListener('click', () => { hidePops(); deleteTab(tabPop.dataset.id); });
   $('#addTab').addEventListener('click', async () => {
     const name = await ask({ title: 'New sheet', value: 'Notes', ok: 'Add' });
     if (!name) return;
@@ -1509,7 +1666,8 @@ function wire() {
   });
 
   el.syncBtn.addEventListener('click', () => pushAll(true));
-  $('#openBtn').addEventListener('click', openDocs);
+  $('#reloadBtn').addEventListener('click', () => { el.menu.close(); reloadFromDoc(); });
+  $('#oldDocsBtn').addEventListener('click', trashOldDocs);
   $('#booksBtn').addEventListener('click', openBooks);
   $('#newBookBtn').addEventListener('click', () => { $('#books').close(); newBookCmd(); });
   $('#openDocBtn').addEventListener('click', () => { $('#books').close(); openDocs(); });
@@ -1521,7 +1679,12 @@ function wire() {
   });
   document.addEventListener('click', renewOnClick, true);
   $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ask').close('ok'); } });
-  $('#menuBtn').addEventListener('click', openMenu);
+  $('#menuBtn').addEventListener('click', e => {
+    if (!phone()) return openMenu();
+    if (!more.hidden) return hidePops();
+    $('#mRead').textContent = reading() ? 'Back to writing' : 'Read';
+    showPop(more, e.currentTarget);
+  });
   $('#spellBtn').addEventListener('click', () => setSpell(!pref.get('spell', false)));
   const pop = $('#colorPop'), cbtn = $('#colorBtn');
   const showColors = on => {
@@ -1567,15 +1730,32 @@ function closeNavOnPhone() { el.shell.classList.remove('nav-open'); }
 
 async function deleteTab(id) {
   const t = tabById(id);
-  if (!t || t.kind === 'ms') return;
-  if (!await ask({ title: 'Delete sheet?', text: `Delete the sheet "${t.name}"? This cannot be undone in Io.${t.docId ? ' Its Google Doc stays in your Drive.' : ''}`, ok: 'Delete', danger: true })) return;
+  if (!t) return;
+  if (book.tabs.length === 1) return void ask({ title: 'Last sheet', text: 'A book needs at least one sheet. Add another first, or delete the whole book from Books.', cancel: null });
+  if (!await ask({ title: 'Delete sheet?', text: `Delete the sheet "${t.name}" from this book, on every device? This cannot be undone in Io.${t.docTab ? ' Its tab is removed from the Google Doc at the next save; Google keeps it in the version history.' : ''}`, ok: 'Delete', danger: true })) return;
+  const i = book.tabs.indexOf(t);
   dirty.delete(id);
   editors[id]?.remove();
   delete editors[id];
   book.tabs = book.tabs.filter(x => x.id !== id);
   book.deleted = { ...book.deleted, [id]: Date.now() };
+  if (t.docTab) book.dropTabs = [...(book.dropTabs || []), t.docTab];
+  if (t.kind === 'ms' && !book.tabs.some(x => x.kind === 'ms')) book.tabs[0].kind = 'ms';
   await dbPut([['tab:' + id, undefined]]);
-  openTab(book.tabs[0].id);
+  await openTab(book.active === id ? book.tabs[Math.max(0, i - 1)].id : book.active);
+  renderSync();
+}
+
+async function renameTab(id) {
+  const t = tabById(id);
+  const name = t && await ask({ title: 'Rename sheet', value: t.name, ok: 'Rename' });
+  if (!name) return;
+  t.name = name.slice(0, 60);
+  t.nameAt = Date.now();
+  editors[t.id]?.setAttribute('aria-label', t.name);
+  saveBook();
+  renderTabs();
+  renderSync();
 }
 
 function singleWindow() {
@@ -1605,6 +1785,7 @@ async function init() {
   if (!book) { book = { ...newBook(), id: 'main' }; await dbPut([[bookKey(), book]]); }
   pref.set('bookId', book.id);
   if (!tabById(book.active)) book.active = book.tabs[0].id;
+  migrateDocs();
   el.title.value = book.title;
   document.title = book.title + ' - Io';
   setSpell(pref.get('spell', false));
