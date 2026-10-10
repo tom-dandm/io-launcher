@@ -123,13 +123,15 @@ async function openTab(id) {
     ed = document.createElement('div');
     ed.className = 'editor' + (t.kind === 'ms' ? ' ms' : '');
     ed.contentEditable = 'true';
-    ed.spellcheck = pref.get('spell', false);
+    ed.spellcheck = pref.get('spell', false) && !reading();
     ed.setAttribute('role', 'textbox');
     ed.setAttribute('aria-multiline', 'true');
     ed.setAttribute('aria-label', t.name);
     ed.innerHTML = (await dbGet('tab:' + id)) || starter(t);
     ed.addEventListener('input', onInput);
     ed.addEventListener('paste', onPaste);
+    ed.addEventListener('beforeinput', e => { if (reading() && !e.inputType.startsWith('history')) e.preventDefault(); });
+    if (reading()) ed.inputMode = 'none';
     ed.addEventListener('keydown', onKey);
     editors[id] = ed;
     el.stage.append(ed);
@@ -171,6 +173,7 @@ function normalise(ed) {
 
 function onPaste(e) {
   e.preventDefault();
+  if (reading()) return;
   const text = e.clipboardData.getData('text/plain');
   if (!text) return;
   const parts = text.replace(/\r\n?/g, '\n').split(/\n/);
@@ -181,6 +184,11 @@ function onPaste(e) {
 
 function onKey(e) {
   const mod = e.ctrlKey || e.metaKey;
+  if (reading() && !mod && !e.altKey && (e.key === ' ' || e.key === 'PageDown' || e.key === 'PageUp')) {
+    e.preventDefault();
+    const s = el.scroller, up = e.key === 'PageUp' || e.shiftKey;
+    return void s.scrollBy({ top: (up ? -1 : 1) * (s.clientHeight - 3 * parseFloat(getComputedStyle(curEd()).lineHeight)), behavior: 'smooth' });
+  }
   const fk = { F1: 'red', F2: 'green', F3: 'blue' }[e.key];
   if (fk && !mod && !e.altKey && !e.shiftKey) { e.preventDefault(); return void run(fk); }
   if (!mod) return;
@@ -222,7 +230,7 @@ function selectWordAt(sel) {
 
 function run(c, v) {
   const ed = curEd();
-  if (!ed) return;
+  if (!ed || reading() && !(c in MARKS || c === 'clear')) return;
   const sel = getSelection();
   if (!sel.rangeCount || !ed.contains(sel.anchorNode)) {
     ed.focus();
@@ -385,7 +393,9 @@ function onScroll() {
       el.toc.children[idx]?.scrollIntoView({ block: 'nearest' });
       activeHead = idx;
     }
-    el.stPage.textContent = curTab().kind === 'ms' && idx >= 0 ? `Chapter ${idx + 1} of ${heads.length}` : '';
+    const ch = curTab().kind === 'ms' && idx >= 0 ? `Chapter ${idx + 1} of ${heads.length}` : '';
+    const s = el.scroller, pct = Math.round(100 * s.scrollTop / Math.max(1, s.scrollHeight - s.clientHeight));
+    el.stPage.textContent = reading() ? [ch, pct + '%'].filter(Boolean).join(' · ') : ch;
     later('scrollpos', 400, () => pref.set('scroll.' + book.active, el.scroller.scrollTop));
   });
 }
@@ -456,9 +466,54 @@ function selectChapter(i) {
   s.addRange(r);
 }
 
+const reading = () => document.documentElement.classList.contains('reading');
+const READ_THEME = { light: '#fbfaf7', sepia: '#f4ecd8', dark: '#111110' };
+
+// Keeps the paragraph at the top of the screen in place while the text reflows.
+function keepPlace(change) {
+  const ed = curEd(), s = el.scroller, top = s.getBoundingClientRect().top;
+  const kids = ed ? ed.children : [];
+  let lo = 0, hi = kids.length - 1, a = null;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (kids[mid].getBoundingClientRect().bottom > top) { a = kids[mid]; hi = mid - 1; } else lo = mid + 1; }
+  const off = a ? a.getBoundingClientRect().top - top : 0;
+  change();
+  if (a) s.scrollTop += a.getBoundingClientRect().top - top - off;
+  layout();
+}
+
+function setReading(on) {
+  keepPlace(() => {
+    document.documentElement.classList.toggle('reading', on);
+    el.title.readOnly = on;
+    for (const ed of Object.values(editors)) {
+      if (on) ed.inputMode = 'none'; else ed.removeAttribute('inputmode');
+      ed.spellcheck = !on && pref.get('spell', false);
+    }
+    el.shell.classList.toggle('nav-hidden', on || pref.get('navHidden', false));
+    el.shell.classList.remove('nav-open');
+    setReadTheme(pref.get('readTheme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  });
+  pref.set('reading', on);
+  $('#colorPop').hidden = true;
+  $('#readPop').hidden = true;
+}
+
+function setReadTheme(t) {
+  document.documentElement.dataset.read = t;
+  for (const b of document.querySelectorAll('[data-read]')) if (b.tagName === 'BUTTON') b.setAttribute('aria-pressed', b.dataset.read === t);
+  $('meta[name="theme-color"]').content = reading() ? READ_THEME[t] : '#f3f2f1';
+}
+
+function setReadSize(step) {
+  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--read-size')) || 20;
+  const px = Math.min(32, Math.max(14, now + step * 2));
+  keepPlace(() => document.documentElement.style.setProperty('--read-size', px + 'px'));
+  pref.set('readSize', px);
+}
+
 function setSpell(on) {
   pref.set('spell', on);
-  for (const ed of Object.values(editors)) ed.spellcheck = on;
+  for (const ed of Object.values(editors)) ed.spellcheck = on && !reading();
   $('#spellBtn').setAttribute('aria-pressed', on);
 }
 
@@ -1384,9 +1439,31 @@ function wire() {
     if (n.isConnected) { goTo(n, true, true); flash(n); }
   });
 
+  $('#readBtn').addEventListener('click', () => setReading(true));
+  $('#readDone').addEventListener('click', () => setReading(false));
+  const rpop = $('#readPop'), aa = $('#readAa');
+  const showRead = on => {
+    rpop.hidden = !on;
+    aa.setAttribute('aria-expanded', on);
+    if (!on) return;
+    const r = aa.getBoundingClientRect();
+    rpop.style.left = Math.max(8, Math.min(r.right - rpop.offsetWidth, innerWidth - rpop.offsetWidth - 8)) + 'px';
+    rpop.style.top = r.bottom + 4 + 'px';
+  };
+  aa.addEventListener('click', () => showRead(rpop.hidden));
+  rpop.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
+  document.addEventListener('pointerdown', e => { if (!rpop.hidden && !rpop.contains(e.target) && !aa.contains(e.target)) showRead(false); });
+  $('#readSmaller').addEventListener('click', () => setReadSize(-1));
+  $('#readBigger').addEventListener('click', () => setReadSize(1));
+  for (const b of document.querySelectorAll('button[data-read]')) b.addEventListener('click', () => { pref.set('readTheme', b.dataset.read); setReadTheme(b.dataset.read); });
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === 'KeyR') { e.preventDefault(); setReading(!reading()); }
+    else if (e.key === 'Escape' && !rpop.hidden) showRead(false);
+    else if (e.key === 'Escape' && reading() && $('#colorPop').hidden && !document.querySelector('dialog[open]')) setReading(false);
+  });
   $('#navToggle').addEventListener('click', () => {
     if (matchMedia('(max-width: 900px)').matches) el.shell.classList.toggle('nav-open');
-    else { el.shell.classList.toggle('nav-hidden'); pref.set('navHidden', el.shell.classList.contains('nav-hidden')); later('layout', 50, layout); }
+    else { el.shell.classList.toggle('nav-hidden'); if (!reading()) pref.set('navHidden', el.shell.classList.contains('nav-hidden')); later('layout', 50, layout); }
   });
 
   el.tabs.addEventListener('click', async e => {
@@ -1536,6 +1613,8 @@ async function init() {
   wire();
   singleWindow();
   await openTab(book.active);
+  if (pref.get('readSize', 0)) document.documentElement.style.setProperty('--read-size', pref.get('readSize', 20) + 'px');
+  if (pref.get('reading', false)) setReading(true);
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
   if (navigator.onLine && pref.get('signedIn', false)) loadGis().catch(() => {});

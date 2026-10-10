@@ -35,6 +35,11 @@
     <button type="button" id="spellBtn" title="Show spelling mistakes" aria-pressed="false">Spelling</button>
   </div>
   <div class="bar-end">
+    <div class="read-ctl" role="group" aria-label="Reading">
+      <button type="button" class="sync-btn" id="readAa" title="Text size and page colour" aria-haspopup="true" aria-expanded="false" aria-controls="readPop">Aa</button>
+      <button type="button" class="sync-btn" id="readDone" title="Back to writing (Esc)">Done</button>
+    </div>
+    <button type="button" class="sync-btn" id="readBtn" title="Reading mode (Ctrl+Alt+R)">Read</button>
     <button type="button" class="sync-btn" id="booksBtn" title="Your books: switch, or start a new one">Books</button>
     <button type="button" class="sync-btn" id="openBtn" title="Open a Google Doc (Ctrl+O)">Open</button>
     <button type="button" class="sync-btn" id="syncBtn" title="Push to Google Docs (Ctrl+S)">Google Doc</button>
@@ -80,6 +85,18 @@
   <button type="button" data-color="blue" style="--ink:#1e3a8a" title="Blue (F3)" aria-label="Blue"></button>
 </div>
 
+<div class="read-pop" id="readPop" role="group" aria-label="Text size and page colour" hidden>
+  <div class="read-row">
+    <button type="button" id="readSmaller" aria-label="Smaller text" title="Smaller text"><span style="font-size:13px">A</span></button>
+    <button type="button" id="readBigger" aria-label="Bigger text" title="Bigger text"><span style="font-size:20px">A</span></button>
+  </div>
+  <div class="read-row">
+    <button type="button" data-read="light" title="White page">Light</button>
+    <button type="button" data-read="sepia" title="Sepia page">Sepia</button>
+    <button type="button" data-read="dark" title="Dark page">Dark</button>
+  </div>
+</div>
+
 <dialog id="menu" class="menu">
   <form method="dialog" class="menu-in">
     <h2>Settings</h2>
@@ -114,6 +131,7 @@
       <dt>Ctrl+Shift+E / X / F</dt><dd>Needs editing / remove / Fix this! (with nothing selected, tags the word at the cursor)</dd>
       <dt>F1 / F2 / F3</dt><dd>Red / green / blue text (press again for the default colour)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
+      <dt>Ctrl+Alt+R</dt><dd>Reading mode (Esc goes back to writing; Space / Shift+Space turn the page)</dd>
       <dt>Ctrl+S</dt><dd>Save and push to Google Docs</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
