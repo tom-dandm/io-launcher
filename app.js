@@ -174,7 +174,10 @@ function normalise(ed) {
 function onPaste(e) {
   e.preventDefault();
   if (reading()) return;
-  const text = e.clipboardData.getData('text/plain');
+  pastePlain(e.clipboardData.getData('text/plain'));
+}
+
+function pastePlain(text) {
   if (!text) return;
   const parts = text.replace(/\r\n?/g, '\n').split(/\n/);
   if (parts.length === 1) return void document.execCommand('insertText', false, text);
@@ -332,6 +335,34 @@ function updateTools() {
   };
   for (const b of document.querySelectorAll('#tools [data-cmd], #selPop [data-cmd]')) {
     if (b.dataset.cmd in on) b.setAttribute('aria-pressed', on[b.dataset.cmd] ? 'true' : 'false');
+  }
+}
+
+// Cut, Copy, Paste and Select all for the phone menu (the system bar is suppressed).
+async function clip(c) {
+  const ed = curEd(), sel = getSelection();
+  if (!ed) return;
+  if (!sel.rangeCount || !ed.contains(sel.anchorNode)) {
+    ed.focus();
+    if (lastRange && ed.contains(lastRange.startContainer)) { sel.removeAllRanges(); sel.addRange(lastRange); }
+  }
+  if (c === 'all') { sel.selectAllChildren(ed); return; }
+  if (c === 'copy' || c === 'cut' && !reading()) {
+    const text = sel.toString();
+    if (!document.execCommand(c)) {
+      try { await navigator.clipboard.writeText(text); } catch { return void toast('Could not copy.'); }
+      if (c === 'cut') document.execCommand('delete');
+    }
+    $('#selPop').hidden = true;
+    return;
+  }
+  if (c === 'paste' && !reading()) {
+    const r = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    let text;
+    try { text = await navigator.clipboard.readText(); } catch { return void toast('Paste was blocked. Allow clipboard access for Io.'); }
+    ed.focus();
+    if (r) { sel.removeAllRanges(); sel.addRange(r); }
+    pastePlain(text);
   }
 }
 
@@ -1612,7 +1643,7 @@ function wire() {
   el.stage.addEventListener('contextmenu', e => { if (touchy) e.preventDefault(); });
   const selPop = $('#selPop');
   for (const t of ['pointerdown', 'mousedown']) selPop.addEventListener(t, e => { if (e.target.closest('button')) e.preventDefault(); });
-  selPop.addEventListener('click', e => { const b = e.target.closest('[data-cmd]'); if (b) run(b.dataset.cmd); });
+  selPop.addEventListener('click', e => { const b = e.target.closest('[data-cmd], [data-clip]'); if (b) b.dataset.clip ? clip(b.dataset.clip) : run(b.dataset.cmd); });
   document.addEventListener('pointerdown', e => { if (!e.target.closest('.pop-menu, [data-menu], #menuBtn')) hidePops(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePops(); });
   const more = $('#morePop');
