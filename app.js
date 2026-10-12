@@ -796,33 +796,76 @@ function loadGis() {
 const wantScope = () => pref.get('docsAccess', false) || book.linked ? SCOPE_DOCS : SCOPE;
 const hasDocs = () => G.valid() && SCOPE_DOCS.split(' ').every(x => (G.scope || '').split(' ').includes(x));
 
-async function signIn(scope = wantScope()) {
-  await loadGis();
-  return new Promise((res, rej) => {
-    const c = google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope,
-      hint: pref.get('googleEmail', ''),
-      callback: r => {
-        if (r.error) return rej(new Error(r.error_description || r.error));
-        G.token = r.access_token;
-        G.exp = Date.now() + r.expires_in * 1000;
-        G.scope = r.scope || scope;
-        try { localStorage.setItem('io.token', JSON.stringify({ token: G.token, exp: G.exp, scope: G.scope })); } catch {}
-        pref.set('signedIn', true);
-        renderSync();
-        renderAccount();
-        res();
-        if (!pref.get('googleEmail', '')) gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => { pref.set('googleEmail', a.user.emailAddress); renderAccount(); }, () => {});
-      },
-      error_callback: e => rej(new Error(e.message || 'Sign-in was closed.')),
-    });
-    c.requestAccessToken({ prompt: '' });
+function gotToken(r, scope) {
+  G.token = r.access_token;
+  G.exp = Date.now() + r.expires_in * 1000;
+  G.scope = r.scope || scope;
+  try { localStorage.setItem('io.token', JSON.stringify({ token: G.token, exp: G.exp, scope: G.scope })); } catch {}
+  pref.set('signedIn', true);
+  renderSync();
+  renderAccount();
+  if (!pref.get('googleEmail', '')) gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => { pref.set('googleEmail', a.user.emailAddress); renderAccount(); }, () => {});
+}
+
+// Phones sign in by leaving the page and coming back (a popup there can lose its way back to Io).
+const pageSignIn = () => matchMedia('(pointer: coarse)').matches;
+
+async function signInByPage(scope) {
+  const state = uid();
+  try { sessionStorage.setItem('io.oauth', JSON.stringify({ state, scope })); } catch {}
+  clearTimeout(timers.book);
+  await dbPut([[bookKey(), book]]);
+  await flush();
+  const q = new URLSearchParams({
+    client_id: CLIENT_ID, redirect_uri: location.origin + location.pathname, response_type: 'token',
+    scope, state, include_granted_scopes: 'true',
   });
+  const hint = pref.get('googleEmail', '');
+  if (hint) q.set('login_hint', hint);
+  location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + q);
+  return new Promise(() => {});
+}
+
+// Picks up the token Google puts in the address after signInByPage. Returns true if signed in.
+function signInReturn() {
+  if (!location.hash.includes('state=')) return null;
+  const r = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+  history.replaceState(null, '', location.pathname + location.search);
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem('io.oauth') || 'null'); sessionStorage.removeItem('io.oauth'); } catch {}
+  if (!saved || saved.state !== r.state) return null;
+  if (r.error) { toast(r.error === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in failed: ' + r.error); return false; }
+  gotToken({ access_token: r.access_token, expires_in: +r.expires_in, scope: r.scope }, saved.scope);
+  toast('Signed in to Google.');
+  return true;
+}
+
+function signIn(scope = wantScope()) {
+  if (pageSignIn()) return signInByPage(scope);
+  // One sign-in at a time: a second request replaces the first popup and neither one answers.
+  if (G.signing) return G.signing;
+  G.signing = (async () => {
+    await loadGis();
+    await new Promise((res, rej) => {
+      const c = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope,
+        hint: pref.get('googleEmail', ''),
+        callback: r => {
+          if (r.error) return rej(new Error(r.error_description || r.error));
+          gotToken(r, scope);
+          res();
+        },
+        error_callback: e => rej(new Error(e.message || 'Sign-in was closed.')),
+      });
+      c.requestAccessToken({ prompt: '' });
+    });
+  })().finally(() => { G.signing = null; });
+  return G.signing;
 }
 
 function renewOnClick() {
-  if (G.renewing || G.busy || G.valid() || !pref.get('signedIn', false) || !navigator.onLine || !window.google?.accounts?.oauth2) return;
+  if (G.renewing || G.signing || G.busy || G.valid() || pageSignIn() || !pref.get('signedIn', false) || !navigator.onLine || !window.google?.accounts?.oauth2) return;
   G.renewing = true;
   signIn().then(() => pushAll(false), () => renderSync()).finally(() => { G.renewing = false; });
 }
@@ -1798,6 +1841,7 @@ async function init() {
   if (pref.get('reading', false)) setReading(true);
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
+  signInReturn();
   if (navigator.onLine && pref.get('signedIn', false)) loadGis().catch(() => {});
   if (navigator.onLine && G.valid()) pushAll(false);
   renderSync();
