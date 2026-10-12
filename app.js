@@ -975,8 +975,9 @@ async function mergeData(remote) {
     el.title.value = book.title;
     document.title = book.title + ' - Io';
   }
+  // A Doc save since the other device wrote its list has already removed those tabs.
+  if ((rb.pushedAt || 0) >= (book.pushedAt || 0)) book.dropTabs = [...new Set([...(book.dropTabs || []), ...(rb.dropTabs || [])])];
   if ((rb.pushedAt || 0) > (book.pushedAt || 0)) Object.assign(book, pick(rb, DOC_KEYS));
-  book.dropTabs = [...new Set([...(book.dropTabs || []), ...(rb.dropTabs || [])])];
   for (const r0 of rb.tabs) {
     if (book.deleted[r0.id]) continue;
     const r = pick(r0, SHARED);
