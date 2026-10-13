@@ -122,7 +122,7 @@ async function openTab(id) {
     const t = tabById(id);
     ed = document.createElement('div');
     ed.className = 'editor' + (t.kind === 'ms' ? ' ms' : '');
-    ed.contentEditable = 'true';
+    ed.contentEditable = String(!book.viewOnly);
     ed.spellcheck = pref.get('spell', false) && !reading();
     ed.setAttribute('role', 'textbox');
     ed.setAttribute('aria-multiline', 'true');
@@ -553,7 +553,7 @@ function keepPlace(change) {
 function setReading(on) {
   keepPlace(() => {
     document.documentElement.classList.toggle('reading', on);
-    el.title.readOnly = on;
+    el.title.readOnly = on || !!book.viewOnly;
     for (const ed of Object.values(editors)) {
       if (on) ed.inputMode = 'none'; else ed.removeAttribute('inputmode');
       ed.spellcheck = !on && pref.get('spell', false);
@@ -721,7 +721,7 @@ async function autoBackupHere(dir, name) {
 }
 
 async function autoBackup(force = false, gesture = false) {
-  if (!window.showDirectoryPicker || autoBackup.busy) return;
+  if (!window.showDirectoryPicker || autoBackup.busy || book.viewOnly && !force) return;
   const last = pref.get('autoLast.' + book.id, null);
   if (!force && last && (Date.now() - last.at < AUTO_EVERY || last.sig === autoSig())) return;
   autoBackup.busy = true;
@@ -1161,6 +1161,16 @@ async function findDoc() {
   return (await gfetch('GET', `${DRIVE}/files?q=${q}&fields=files(id,name)`)).files[0] || null;
 }
 
+// A Doc shared with this account as view only: the book is read-only in Io and is never saved to Google or backed up.
+function setViewOnly(on) {
+  book.viewOnly = on;
+  book.conflict = false;
+  document.documentElement.classList.toggle('view-only', on);
+  for (const ed of Object.values(editors)) ed.contentEditable = String(!on);
+  el.title.readOnly = on || reading();
+}
+const canEditDoc = async id => (await gfetch('GET', `${DRIVE}/files/${id}?fields=capabilities(canEdit)&supportsAllDrives=true`)).capabilities?.canEdit !== false;
+
 async function pushDoc(interactive) {
   const snapAt = Date.now();
   let doc = null, made = false;
@@ -1233,16 +1243,30 @@ async function pushAll(interactive) {
   try {
     await flush();
     if (!G.valid()) await signIn();
+    G.error = null;
+    if (book.linked && hasDocs() && (book.viewOnly === undefined || book.viewOnly && interactive)) {
+      const was = book.viewOnly;
+      setViewOnly(!await canEditDoc(book.docId));
+      if (was && !book.viewOnly) return toast(`You can now edit "${docName()}". Use Load from Google (Settings) first to get the latest version.`);
+    }
+    if (book.viewOnly) {
+      if (interactive) toast(`You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
+      return;
+    }
     await syncData();
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
     if (book.linked && !hasDocs()) { if (interactive) toast('Allow access to your Google Docs (Settings) to save this book back to its Doc.'); }
     else if (docsDue && needsDoc() && (interactive || !book.conflict)) {
-      await pushDoc(interactive);
-      book.docsAt = Date.now();
-      await syncData();
-      if (interactive && !book.conflict) toast('Saved to Google.');
+      if (book.linked && !await canEditDoc(book.docId)) {
+        setViewOnly(true);
+        if (interactive) toast(`You can now only view "${docName()}" in Google Docs, so Io did not save to it.`);
+      } else {
+        await pushDoc(interactive);
+        book.docsAt = Date.now();
+        await syncData();
+        if (interactive && !book.conflict) toast('Saved to Google.');
+      }
     } else if (interactive) toast('Saved to Google. The Google Doc is up to date.');
-    G.error = null;
   } catch (e) {
     G.error = e.message;
     if (interactive) toast('Saving to Google failed: ' + e.message);
@@ -1265,6 +1289,7 @@ function renderSync() {
     label = 'Save to Google'; state = 'warn';
     note = conflict ? 'Changed in Google Docs. Press Save to overwrite.' : G.error;
   }
+  else if (book.viewOnly) { label = 'View only'; state = ''; }
   else if (!G.valid() && pref.get('signedIn', false)) { label = 'Sign in to save'; state = waiting ? 'pending' : ''; }
   else if (waiting) { label = 'Save to Google'; state = 'pending'; }
   else { label = 'Google Doc'; state = 'ok'; }
@@ -1276,7 +1301,7 @@ function renderSync() {
   if (!note && !G.valid() && !G.busy) note = pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
   const warn = !!note;
   if (!navigator.onLine) note = 'Offline. Saved on this device.';
-  const lastTxt = book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Saved ' + when(last) : '';
+  const lastTxt = book.viewOnly ? 'View only. Not saved to Google.' : book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Saved ' + when(last) : '';
   el.stSync.textContent = note || lastTxt;
   el.stSync.className = warn && navigator.onLine ? 'st-sync warn' : 'st-sync';
   b.title = [lastTxt || 'Not saved to Google yet', waiting ? waiting + ' sheet(s) waiting' : ''].filter(Boolean).join('. ');
@@ -1291,7 +1316,7 @@ function renderDocLinks() {
     a.target = '_blank';
     a.rel = 'noopener';
     a.textContent = docName();
-    li.append(a, ` (${book.tabs.length} tab${book.tabs.length === 1 ? '' : 's'}${book.pushedAt ? ', saved ' + when(book.pushedAt) : ''})`);
+    li.append(a, ` (${book.tabs.length} tab${book.tabs.length === 1 ? '' : 's'}${book.viewOnly ? ', view only' : book.pushedAt ? ', saved ' + when(book.pushedAt) : ''})`);
     f.append(li);
   }
   $('#docLinks').replaceChildren(f);
@@ -1398,13 +1423,15 @@ async function openDocFile(f) {
     const mine = (await localBooks()).find(b => b.docId === f.id);
     if (mine && mine.id !== book.id) return switchBook(mine.id);
     if (mine) return reloadFromDoc();
-    const doc = await fullDoc(f.id), lost = {};
+    const [doc, canEdit] = await Promise.all([fullDoc(f.id), canEditDoc(f.id)]), lost = {};
     const sheets = docSheets(doc, lost);
     const kinds = Object.keys(lost);
     if (kinds.length && !await ask({
       title: 'Some of this Doc will not come across',
-      text: `Io cannot show ${kinds.map(k => LOST[k]).join(', ')}. Saving from Io rewrites the Doc, so these would be removed from it. Google keeps the old version in its version history. Open it anyway?`,
-      ok: 'Open', danger: true,
+      text: `Io cannot show ${kinds.map(k => LOST[k]).join(', ')}. ` + (canEdit
+        ? 'Saving from Io rewrites the Doc, so these would be removed from it. Google keeps the old version in its version history. Open it anyway?'
+        : 'You can only view this Doc, so Io will not change it. Open it anyway?'),
+      ok: 'Open', danger: canEdit,
     })) return;
     const now = Date.now();
     const tabs = sheets.map((s, i) => ({
@@ -1413,10 +1440,10 @@ async function openDocFile(f) {
     }));
     const b = {
       id: uid(), title: doc.title.slice(0, 80) || 'Untitled', titleAt: now, active: tabs[0].id, tabs, docVer: 2,
-      linked: true, docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, pushedAt: now,
+      linked: true, docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, pushedAt: now, viewOnly: !canEdit,
     };
     await dbPut([[bookKey(b.id), b], ...tabs.map((t, i) => ['tab:' + t.id, sheets[i].html])]);
-    toast(`Opened "${doc.title}" as a new book, ${tabs.length} sheet${tabs.length === 1 ? '' : 's'}.`);
+    toast(`Opened "${doc.title}" as a new book, ${tabs.length} sheet${tabs.length === 1 ? '' : 's'}${canEdit ? '' : '. You can only view it, so it is read-only here'}.`);
     switchBook(b.id);
   } catch (e) {
     toast('Could not open the Doc: ' + e.message);
@@ -1714,14 +1741,14 @@ function wire() {
   });
 
   const tabPop = $('#tabPop');
-  const tabMenu = (id, anchor) => { tabPop.dataset.id = id; showPop(tabPop, anchor); };
+  const tabMenu = (id, anchor) => { if (book.viewOnly) return; tabPop.dataset.id = id; showPop(tabPop, anchor); };
   el.tabs.addEventListener('click', e => {
     const m = e.target.closest('[data-menu]');
     if (m) return tabMenu(m.dataset.menu, m);
     const b = e.target.closest('.tab');
     if (b && b.dataset.id !== book.active) openTab(b.dataset.id);
   });
-  el.tabs.addEventListener('dblclick', e => { const b = e.target.closest('.tab'); if (b && !e.target.closest('[data-menu]')) renameTab(b.dataset.id); });
+  el.tabs.addEventListener('dblclick', e => { const b = e.target.closest('.tab'); if (b && !e.target.closest('[data-menu]') && !book.viewOnly) renameTab(b.dataset.id); });
   el.tabs.addEventListener('contextmenu', e => { const b = e.target.closest('.tab'); if (b) { e.preventDefault(); tabMenu(b.dataset.id, b); } });
   $('#tabRename').addEventListener('click', () => { hidePops(); renameTab(tabPop.dataset.id); });
   $('#tabDelete').addEventListener('click', () => { hidePops(); deleteTab(tabPop.dataset.id); });
@@ -1876,6 +1903,8 @@ async function init() {
   if (!tabById(book.active)) book.active = book.tabs[0].id;
   migrateDocs();
   el.title.value = book.title;
+  el.title.readOnly = !!book.viewOnly;
+  document.documentElement.classList.toggle('view-only', !!book.viewOnly);
   document.title = book.title + ' - Io';
   setSpell(pref.get('spell', false));
   if (pref.get('navHidden', false)) el.shell.classList.add('nav-hidden');

@@ -453,6 +453,10 @@ button { cursor: pointer; }
 .sel-pop .dot::before { content: ""; display: block; width: 22px; height: 22px; margin: auto; border-radius: 50%; background: var(--ink); }
 .sel-pop .dot[aria-pressed="true"]::before { box-shadow: 0 0 0 2px var(--chrome), 0 0 0 4px var(--accent); }
 .sel-pop.marks-only .sel-fmt, .sel-pop.marks-only .sel-edit { display: none; }
+.view-only .tools, .view-only .add-tab, .view-only .tabs [data-menu],
+.view-only .sel-pop .sel-row:not(.sel-clip), .view-only .sel-pop .sel-edit,
+.view-only .side-fix, .view-only .fixes { display: none; }
+.view-only .bar-end { margin-left: auto; }
 
 .read-ctl { display: none; }
 
