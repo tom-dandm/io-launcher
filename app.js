@@ -367,10 +367,11 @@ async function clip(c) {
 }
 
 // Touch only: Io's own menu for a selection, in place of the phone's Cut / Copy / Paste bar.
-let touchy = false;
+// In reading mode a caret (no selection) shows the menu only after a double tap or long press.
+let touchy = false, wordTap = false;
 function renderSelPop() {
   const p = $('#selPop'), sel = getSelection(), ed = curEd();
-  const on = touchy && ed && sel.rangeCount && ed.contains(sel.anchorNode) && (!sel.isCollapsed || reading()) && !document.querySelector('dialog[open]');
+  const on = touchy && ed && sel.rangeCount && ed.contains(sel.anchorNode) && (!sel.isCollapsed || (reading() && wordTap)) && !document.querySelector('dialog[open]');
   const rects = on ? sel.getRangeAt(0).getClientRects() : [];
   const vv = window.visualViewport || { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
   const first = rects[0], last = rects[rects.length - 1];
@@ -1641,6 +1642,19 @@ function wire() {
   window.visualViewport?.addEventListener('resize', () => later('selpop', 50, renderSelPop));
   document.addEventListener('pointerdown', e => { touchy = e.pointerType !== 'mouse'; }, true);
   el.stage.addEventListener('contextmenu', e => { if (touchy) e.preventDefault(); });
+  let lastTap = null, press = null;
+  const endPress = () => { clearTimeout(press?.timer); press = null; };
+  el.stage.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') return;
+    const t = { x: e.clientX, y: e.clientY, at: e.timeStamp };
+    wordTap = !!lastTap && t.at - lastTap.at < 400 && Math.hypot(t.x - lastTap.x, t.y - lastTap.y) < 30;
+    lastTap = wordTap ? null : t;
+    endPress();
+    press = { x: t.x, y: t.y, timer: setTimeout(() => { wordTap = true; renderSelPop(); }, 500) };
+    later('selpop', 150, renderSelPop);
+  });
+  el.stage.addEventListener('pointermove', e => { if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) endPress(); });
+  for (const ev of ['pointerup', 'pointercancel']) el.stage.addEventListener(ev, endPress);
   const selPop = $('#selPop');
   for (const t of ['pointerdown', 'mousedown']) selPop.addEventListener(t, e => { if (e.target.closest('button')) e.preventDefault(); });
   selPop.addEventListener('click', e => { const b = e.target.closest('[data-cmd], [data-clip]'); if (b) b.dataset.clip ? clip(b.dataset.clip) : run(b.dataset.cmd); });
