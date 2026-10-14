@@ -269,7 +269,7 @@ button { cursor: pointer; }
 .tab:hover { background: var(--hover); }
 .tab[aria-selected="true"] {
   background: var(--page);
-  color: #1f1f1f;
+  color: var(--page-ink);
   font-weight: 600;
   box-shadow: inset 0 -3px 0 var(--accent);
 }
@@ -457,6 +457,8 @@ button { cursor: pointer; }
 .view-only .sel-pop .sel-row:not(.sel-clip), .view-only .sel-pop .sel-edit,
 .view-only .side-fix, .view-only .fixes { display: none; }
 .view-only .bar-end { margin-left: auto; }
+.view-only #readDone, .view-only #readBtn, .view-only #mRead, .view-only #mSync, .view-only #mSpell { display: none; }
+:root.view-only.reading #stSync { display: revert; }
 
 .read-ctl { display: none; }
 
@@ -485,8 +487,7 @@ button { cursor: pointer; }
 @media screen {
   .reading .read-ctl { display: flex; align-items: center; gap: 2px; }
   .reading .tools > :not(.mk, [data-cmd="clear"]),
-  .reading #readBtn, .reading #booksBtn, .reading #syncBtn, .reading #menuBtn,
-  .reading .tabs, .reading .add-tab, .reading .zoom,
+  .reading #readBtn, .reading #syncBtn, .reading .tabs [data-menu], .reading .add-tab, .reading .zoom,
   .reading #stEdited, .reading #stWords, .reading #stSync { display: none; }
   .reading .bar, .reading .foot { border-color: transparent; }
   .reading .title { pointer-events: none; font-weight: 500; color: var(--muted); }

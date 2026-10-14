@@ -550,7 +550,9 @@ function keepPlace(change) {
   layout();
 }
 
+// A view-only book is always in reading mode; that does not change the device's reading pref.
 function setReading(on) {
+  if (book.viewOnly) on = true;
   keepPlace(() => {
     document.documentElement.classList.toggle('reading', on);
     el.title.readOnly = on || !!book.viewOnly;
@@ -562,7 +564,7 @@ function setReading(on) {
     el.shell.classList.remove('nav-open');
     setReadTheme(pref.get('readTheme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   });
-  pref.set('reading', on);
+  if (!book.viewOnly) pref.set('reading', on);
   $('#colorPop').hidden = true;
   $('#readPop').hidden = true;
   renderSelPop();
@@ -1167,7 +1169,7 @@ function setViewOnly(on) {
   book.conflict = false;
   document.documentElement.classList.toggle('view-only', on);
   for (const ed of Object.values(editors)) ed.contentEditable = String(!on);
-  el.title.readOnly = on || reading();
+  setReading(on || pref.get('reading', false));
 }
 const canEditDoc = async id => (await gfetch('GET', `${DRIVE}/files/${id}?fields=capabilities(canEdit)&supportsAllDrives=true`)).capabilities?.canEdit !== false;
 
@@ -1741,14 +1743,14 @@ function wire() {
   });
 
   const tabPop = $('#tabPop');
-  const tabMenu = (id, anchor) => { if (book.viewOnly) return; tabPop.dataset.id = id; showPop(tabPop, anchor); };
+  const tabMenu = (id, anchor) => { if (book.viewOnly || reading()) return; tabPop.dataset.id = id; showPop(tabPop, anchor); };
   el.tabs.addEventListener('click', e => {
     const m = e.target.closest('[data-menu]');
     if (m) return tabMenu(m.dataset.menu, m);
     const b = e.target.closest('.tab');
     if (b && b.dataset.id !== book.active) openTab(b.dataset.id);
   });
-  el.tabs.addEventListener('dblclick', e => { const b = e.target.closest('.tab'); if (b && !e.target.closest('[data-menu]') && !book.viewOnly) renameTab(b.dataset.id); });
+  el.tabs.addEventListener('dblclick', e => { const b = e.target.closest('.tab'); if (b && !e.target.closest('[data-menu]') && !book.viewOnly && !reading()) renameTab(b.dataset.id); });
   el.tabs.addEventListener('contextmenu', e => { const b = e.target.closest('.tab'); if (b) { e.preventDefault(); tabMenu(b.dataset.id, b); } });
   $('#tabRename').addEventListener('click', () => { hidePops(); renameTab(tabPop.dataset.id); });
   $('#tabDelete').addEventListener('click', () => { hidePops(); deleteTab(tabPop.dataset.id); });
@@ -1913,7 +1915,7 @@ async function init() {
   singleWindow();
   await openTab(book.active);
   if (pref.get('readSize', 0)) document.documentElement.style.setProperty('--read-size', pref.get('readSize', 20) + 'px');
-  if (pref.get('reading', false)) setReading(true);
+  if (pref.get('reading', false) || book.viewOnly) setReading(true);
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
   signInReturn();
