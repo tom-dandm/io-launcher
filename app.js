@@ -56,6 +56,8 @@ async function dbPut(entries) {
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Marks the Drive data files this device wrote, so it never mistakes its own upload for another device's.
+const DEVICE = pref.get('device', '') || (d => (pref.set('device', d), d))(uid());
 const timers = {};
 function later(name, ms, fn) {
   clearTimeout(timers[name]);
@@ -149,6 +151,7 @@ function onInput() {
   const ed = curEd(), t = curTab();
   normalise(ed);
   t.updatedAt = Date.now();
+  if (t.rev && t.rev === t.baseRev) addPast(t, t.rev);
   t.rev = uid();
   dirty.add(t.id);
   later('save', 800, flush);
@@ -838,15 +841,15 @@ function gotToken(r, scope) {
   pref.set('signedIn', true);
   renderSync();
   renderAccount();
-  if (!pref.get('googleEmail', '')) gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => { pref.set('googleEmail', a.user.emailAddress); renderAccount(); }, () => {});
+  gfetch('GET', 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').then(a => { pref.set('googleEmail', a.user.emailAddress); renderAccount(); }, () => {});
 }
 
 // Phones sign in by leaving the page and coming back (a popup there can lose its way back to Io).
 const pageSignIn = () => matchMedia('(pointer: coarse)').matches;
 
-async function signInByPage(scope) {
+async function signInByPage(scope, quiet) {
   const state = uid();
-  try { sessionStorage.setItem('io.oauth', JSON.stringify({ state, scope })); } catch {}
+  try { sessionStorage.setItem('io.oauth', JSON.stringify({ state, scope, quiet })); } catch {}
   clearTimeout(timers.book);
   await dbPut([[bookKey(), book]]);
   await flush();
@@ -856,6 +859,7 @@ async function signInByPage(scope) {
   });
   const hint = pref.get('googleEmail', '');
   if (hint) q.set('login_hint', hint);
+  if (quiet) q.set('prompt', 'none');
   location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + q);
   return new Promise(() => {});
 }
@@ -868,9 +872,12 @@ function signInReturn() {
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem('io.oauth') || 'null'); sessionStorage.removeItem('io.oauth'); } catch {}
   if (!saved || saved.state !== r.state) return null;
-  if (r.error) { toast(r.error === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in failed: ' + r.error); return false; }
+  if (r.error) {
+    if (!saved.quiet) toast(r.error === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in failed: ' + r.error);
+    return false;
+  }
   gotToken({ access_token: r.access_token, expires_in: +r.expires_in, scope: r.scope }, saved.scope);
-  toast('Signed in to Google.');
+  if (!saved.quiet) toast('Signed in to Google.');
   return true;
 }
 
@@ -898,18 +905,38 @@ function signIn(scope = wantScope()) {
   return G.signing;
 }
 
+// Phones cannot renew from a click, so an expired sign-in is renewed by a quick trip to Google and back
+// (prompt=none: no screen while the Google session lasts). At most once every 10 minutes.
+function renewByPage() {
+  if (!pageSignIn() || G.valid() || !pref.get('signedIn', false) || !navigator.onLine || book.viewOnly) return false;
+  try {
+    if (Date.now() - (+sessionStorage.getItem('io.renewAt') || 0) < 600000) return false;
+    sessionStorage.setItem('io.renewAt', Date.now());
+  } catch { return false; }
+  signInByPage(wantScope(), true);
+  return true;
+}
+
 function renewOnClick() {
   if (G.renewing || G.signing || G.busy || G.valid() || pageSignIn() || !pref.get('signedIn', false) || !navigator.onLine || !window.google?.accounts?.oauth2) return;
   G.renewing = true;
   signIn().then(() => pushAll(false), () => renderSync()).finally(() => { G.renewing = false; });
 }
 
+// Every request has a time limit: one that hangs on a weak connection would otherwise block every later save.
+async function gsend(url, opts, ms) {
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms);
+  const late = new Promise((_, rej) => c.signal.addEventListener('abort', () => rej(new Error('Google did not answer in time. Io will try again.'))));
+  try { return await Promise.race([fetch(url, { ...opts, signal: c.signal }), late]); }
+  finally { clearTimeout(t); }
+}
+
 async function gfetch(method, url, body) {
-  const r = await fetch(url, {
+  const r = await gsend(url, {
     method,
     headers: { Authorization: 'Bearer ' + G.token, 'Content-Type': 'application/json' },
     body: body && JSON.stringify(body),
-  });
+  }, 60000);
   if (r.status === 401) { dropToken(); throw Object.assign(new Error('Google sign-in expired.'), { status: 401 }); }
   if (!r.ok) {
     let msg = r.statusText;
@@ -920,7 +947,7 @@ async function gfetch(method, url, body) {
 }
 
 async function gblob(method, url, body, type) {
-  const r = await fetch(url, { method, headers: { Authorization: 'Bearer ' + G.token, ...(type && { 'Content-Type': type }) }, body });
+  const r = await gsend(url, { method, headers: { Authorization: 'Bearer ' + G.token, ...(type && { 'Content-Type': type }) }, body }, 180000);
   if (r.status === 401) { dropToken(); throw Object.assign(new Error('Google sign-in expired.'), { status: 401 }); }
   if (!r.ok) throw Object.assign(new Error(r.statusText || 'Drive error ' + r.status), { status: r.status });
   return r;
@@ -970,11 +997,14 @@ const pack = async (key, head, fallback) => {
   return inBackground({ key, head, ids, fallback: fb });
 };
 
-const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'updatedAt', 'fixes', 'docTab', 'tabTitle', 'syncedAt', 'pushedAt'];
-const DOC_KEYS = ['docId', 'docTitle', 'revisionId', 'pushedAt', 'linked'];
+const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'past', 'updatedAt', 'fixes', 'docTab', 'tabTitle', 'syncedAt', 'pushedAt'];
+// A sheet's earlier synced revs. Tells an out-of-date copy in the data file (left by two devices
+// uploading at once) from a newer one.
+const addPast = (t, ...revs) => { t.past = [...new Set([...(t.past || []), ...revs.filter(Boolean)])].slice(-200); };
+const DOC_KEYS = ['docId', 'docTitle', 'revisionId', 'docModified', 'pushedAt', 'linked'];
 const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));
 const shareBook = () => ({
-  title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {}, dropTabs: book.dropTabs || [],
+  title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {}, delRevs: book.delRevs || {}, dropTabs: book.dropTabs || [],
   ...pick(book, DOC_KEYS),
   tabs: book.tabs.map(t => pick(t, SHARED)),
 });
@@ -983,6 +1013,16 @@ const tabHtml = async t => editors[t.id] ? serialize(editors[t.id]) : (await dbG
 
 async function mergeData(remote) {
   const rb = remote.book, puts = [];
+  // This device wrote the file last (its upload landed but the sync stopped before it was noted here):
+  // the file holds this device's own earlier state, so its revs become the base and nothing is copied.
+  if (remote.by === DEVICE) {
+    const revs = new Map(rb.tabs.map(t => [t.id, t.rev]));
+    for (const t of book.tabs) if (revs.has(t.id)) {
+      t.baseRev = revs.get(t.id);
+      if (t.rev !== t.baseRev) addPast(t, t.baseRev);
+    }
+    return;
+  }
   let shown = false;
   const drop = id => {
     editors[id]?.remove();
@@ -994,10 +1034,13 @@ async function mergeData(remote) {
   if (!book.dataSig) for (const t of [...book.tabs]) if (!t.rev && !t.docTab) drop(t.id);
   const fresh = { linked: null, docTab: null, tabTitle: null, syncedAt: 0, pushedAt: 0, baseRev: null };
   book.deleted = { ...rb.deleted, ...book.deleted };
+  book.delRevs = { ...rb.delRevs, ...book.delRevs };
   for (const id in book.deleted) {
     const t = tabById(id);
     if (!t) continue;
-    if (t.rev === t.baseRev) { drop(id); continue; }
+    // It goes only if the deleting device had seen this version (older files: unchanged here since the last sync).
+    const seen = book.delRevs[id];
+    if (seen ? seen.includes(t.rev) : t.rev === t.baseRev) { drop(id); continue; }
     const html = await tabHtml(t), c = { ...t, ...fresh, id: uid(), name: t.name + ' (deleted on other device)' };
     drop(id);
     book.tabs.push(c);
@@ -1023,12 +1066,23 @@ async function mergeData(remote) {
       puts.push(['tab:' + r.id, html]);
       continue;
     }
-    const mine = t.rev !== t.baseRev, theirs = r.rev !== t.baseRev && r.rev !== t.rev;
+    const mine = t.rev !== t.baseRev;
+    const theirs = r.rev !== t.baseRev && r.rev !== t.rev && !(t.past || []).includes(r.rev);
+    // This device's last synced version never reached the other device (its upload was overwritten):
+    // keep it as a copy and take theirs, so both devices end up with the same sheets.
+    const lost = theirs && !mine && t.baseRev && r.past && !r.past.includes(t.baseRev);
+    if (lost) {
+      const c = { ...t, ...fresh, id: uid(), kind: 'notes', name: t.name + ' (conflict copy)', rev: uid() };
+      book.tabs.push(c);
+      puts.push(['tab:' + c.id, await tabHtml(t)]);
+    }
     if (theirs && !mine) {
+      addPast(t, t.rev, ...(r.past || []));
       Object.assign(t, { rev: r.rev, baseRev: r.rev, updatedAt: r.updatedAt, fixes: r.fixes });
       puts.push(['tab:' + t.id, html]);
       if (editors[t.id]) { editors[t.id].innerHTML = html || starter(t); shown ||= t.id === book.active; }
     } else if (theirs) {
+      addPast(t, r.rev);
       const c = { ...r, ...fresh, id: uid(), kind: 'notes', name: r.name + ' (other device)' };
       book.tabs.push(c);
       puts.push(['tab:' + c.id, html]);
@@ -1043,17 +1097,33 @@ async function mergeData(remote) {
   renderTabs();
 }
 
-async function syncData() {
+// A file this book had is gone (deleted, or signed in to another Google account). Making a new one
+// would start a second copy, so the automatic save stops and a manual one asks first.
+async function missing(what, interactive) {
+  const who = pref.get('googleEmail', '') || 'this Google account';
+  const text = `Io cannot find this book's ${what} in ${who}. If you signed in with a different Google account, sign out in Settings and sign in with the right one.`;
+  if (interactive && await ask({ title: 'Not found in Google', text: text + ' Or make a new one now.', ok: 'Make a new one' })) return;
+  throw new Error(text);
+}
+
+async function syncData(interactive) {
   await flush();
   let id = book.dataId, version = null, base = book.dataSig;
-  if (!id) {
+  const byName = async () => {
     const q = encodeURIComponent(`name='${dataName(book)}' and trashed=false`);
-    id = (await gfetch('GET', `${DRIVE}/files?q=${q}&orderBy=modifiedTime desc&fields=files(id)`)).files[0]?.id || null;
-  }
+    return (await gfetch('GET', `${DRIVE}/files?q=${q}&orderBy=modifiedTime desc&fields=files(id)`)).files[0]?.id || null;
+  };
+  if (!id) id = await byName();
   if (id) {
     try { version = (await gfetch('GET', `${DRIVE}/files/${id}?fields=version`)).version; }
-    catch (e) { if (e.status !== 404) throw e; id = null; }
+    catch (e) {
+      if (e.status !== 404) throw e;
+      // Another device may have replaced the file: look for it by name before calling it missing.
+      id = id === book.dataId ? await byName() : null;
+      if (id) version = (await gfetch('GET', `${DRIVE}/files/${id}?fields=version`)).version;
+    }
   }
+  if (!id && book.dataAt) await missing('copy in Google Drive', interactive);
   if (id && version !== book.dataVersion) {
     const remote = JSON.parse(await gunzip(await (await gblob('GET', `${DRIVE}/files/${id}?alt=media`)).blob()));
     if (remote?.io === 1) { await mergeData(remote); base = sigOf(remote.book); }
@@ -1061,7 +1131,7 @@ async function syncData() {
   const snap = shareBook();
   let sent = null;
   if (!id || sigOf(snap) !== base) {
-    const head = { io: 1, savedAt: Date.now(), book: snap };
+    const head = { io: 1, savedAt: Date.now(), by: DEVICE, book: snap };
     sent = snap;
     let body = (await pack('html', head, starter))?.blob;
     if (!body) {
@@ -1078,7 +1148,10 @@ async function syncData() {
   }
   // Revs as they were when packed: an edit typed while the upload ran still counts as unsent.
   const revs = new Map(snap.tabs.map(t => [t.id, t.rev]));
-  for (const t of book.tabs) if (revs.has(t.id)) t.baseRev = revs.get(t.id);
+  for (const t of book.tabs) if (revs.has(t.id)) {
+    t.baseRev = revs.get(t.id);
+    if (t.rev !== t.baseRev) addPast(t, t.baseRev);
+  }
   Object.assign(book, { dataId: id, dataVersion: version, dataSig: sent ? sigOf(sent) : base, dataAt: Date.now() });
   clearTimeout(timers.book);
   await dbPut([[bookKey(), book]]);
@@ -1173,19 +1246,29 @@ function setViewOnly(on) {
 }
 const canEditDoc = async id => (await gfetch('GET', `${DRIVE}/files/${id}?fields=capabilities(canEdit)&supportsAllDrives=true`)).capabilities?.canEdit !== false;
 
+const docTime = async () => (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=modifiedTime&supportsAllDrives=true`)).modifiedTime;
+// Changed if Drive's time is over a minute past the one read after Io's last save (Drive can lag a little).
+const docChanged = async () => !book.docModified || Date.parse(await docTime()) - Date.parse(book.docModified) > 60000;
+
 async function pushDoc(interactive) {
   const snapAt = Date.now();
   let doc = null, made = false;
   if (!book.docId && !book.linked) book.docId = (await findDoc())?.id || null;
   if (book.docId) {
     try { doc = await getDoc(book.docId); }
-    catch (e) { if (e.status !== 404) throw e; book.docId = null; book.revisionId = null; }
+    catch (e) {
+      if (e.status !== 404) throw e;
+      await missing(`Google Doc "${docName()}"`, interactive);
+      book.docId = null; book.revisionId = null; book.docModified = null;
+    }
   }
-  if (doc && book.revisionId && doc.revisionId !== book.revisionId) {
+  // Google can change a revisionId with no edit, so a change is confirmed by Drive's modified time.
+  if (doc && book.revisionId && doc.revisionId !== book.revisionId && await docChanged()) {
     if (!interactive) { book.conflict = true; return; }
     if (!await ask({ title: 'Changed in Google Docs', text: `"${docName()}" was changed in Google Docs since Io last saved it. Overwrite it with Io's version? Google keeps the changed version in its version history. To take the changes instead, use Load from Google in Settings.`, ok: 'Overwrite', danger: true })) return;
   }
   if (!doc) {
+    if (book.linked) book.title = book.docTitle || book.title;
     book.linked = false;
     const d = await gfetch('POST', DOCS, { title: book.title });
     book.docId = d.documentId;
@@ -1232,12 +1315,18 @@ async function pushDoc(interactive) {
     t.tabTitle = t.name;
     t.pushedAt = Date.now();
   }
+  book.docModified = await docTime();
   book.pushedAt = Date.now();
   book.conflict = false;
 }
 
-async function pushAll(interactive) {
-  if (G.busy) return;
+function pushAll(interactive) {
+  if (G.job) return interactive ? G.job.then(() => pushAll(true)) : G.job;
+  G.job = pushNow(interactive).finally(() => { G.job = null; });
+  return G.job;
+}
+
+async function pushNow(interactive) {
   if (!navigator.onLine) { if (interactive) toast('Offline. Io will save to Google when you are back online.'); return; }
   if (!interactive && !G.valid()) return renderSync();
   G.busy = true;
@@ -1255,7 +1344,7 @@ async function pushAll(interactive) {
       if (interactive) toast(`You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
       return;
     }
-    await syncData();
+    await syncData(interactive);
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
     if (book.linked && !hasDocs()) { if (interactive) toast('Allow access to your Google Docs (Settings) to save this book back to its Doc.'); }
     else if (docsDue && needsDoc() && (interactive || !book.conflict)) {
@@ -1265,7 +1354,7 @@ async function pushAll(interactive) {
       } else {
         await pushDoc(interactive);
         book.docsAt = Date.now();
-        await syncData();
+        await syncData(interactive);
         if (interactive && !book.conflict) toast('Saved to Google.');
       }
     } else if (interactive) toast('Saved to Google. The Google Doc is up to date.');
@@ -1838,7 +1927,7 @@ function wire() {
   }));
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { clearTimeout(timers.book); dbPut([[bookKey(), book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
-    else { pushAll(false); autoBackup(); }
+    else if (!renewByPage()) { pushAll(false); autoBackup(); }
   });
   addEventListener('pagehide', flush);
   setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); autoBackup(); }, PUSH_EVERY);
@@ -1857,6 +1946,7 @@ async function deleteTab(id) {
   delete editors[id];
   book.tabs = book.tabs.filter(x => x.id !== id);
   book.deleted = { ...book.deleted, [id]: Date.now() };
+  book.delRevs = { ...book.delRevs, [id]: [t.rev, ...(t.past || []).slice(-49)].filter(Boolean) };
   if (t.docTab) book.dropTabs = [...(book.dropTabs || []), t.docTab];
   if (t.kind === 'ms' && !book.tabs.some(x => x.kind === 'ms')) book.tabs[0].kind = 'ms';
   await dbPut([['tab:' + id, undefined]]);
@@ -1918,8 +2008,8 @@ async function init() {
   if (pref.get('reading', false) || book.viewOnly) setReading(true);
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
-  signInReturn();
-  if (navigator.onLine && pref.get('signedIn', false)) loadGis().catch(() => {});
+  if (signInReturn() === null && renewByPage()) return;
+  if (navigator.onLine && pref.get('signedIn', false) && !pageSignIn()) loadGis().catch(() => {});
   if (navigator.onLine && G.valid()) pushAll(false);
   renderSync();
   autoBackup();
