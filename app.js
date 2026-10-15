@@ -1003,7 +1003,7 @@ const SHARED = ['id', 'name', 'nameAt', 'kind', 'rev', 'past', 'updatedAt', 'fix
 // A sheet's earlier synced revs. Tells an out-of-date copy in the data file (left by two devices
 // uploading at once) from a newer one.
 const addPast = (t, ...revs) => { t.past = [...new Set([...(t.past || []), ...revs.filter(Boolean)])].slice(-200); };
-const DOC_KEYS = ['docId', 'docTitle', 'revisionId', 'docModified', 'pushedAt', 'linked'];
+const DOC_KEYS = ['docId', 'docTitle', 'revisionId', 'docSig', 'docModified', 'pushedAt', 'linked'];
 const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));
 const shareBook = () => ({
   title: book.title, titleAt: book.titleAt || 0, deleted: book.deleted || {}, delRevs: book.delRevs || {}, dropTabs: book.dropTabs || [],
@@ -1257,9 +1257,23 @@ function setViewOnly(on) {
 }
 const canEditDoc = async id => (await gfetch('GET', `${DRIVE}/files/${id}?fields=capabilities(canEdit)&supportsAllDrives=true`)).capabilities?.canEdit !== false;
 
-const docTime = async () => (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=modifiedTime&supportsAllDrives=true`)).modifiedTime;
-// Changed if Drive's time is over a minute past the one read after Io's last save (Drive can lag a little).
-const docChanged = async () => !book.docModified || Date.parse(await docTime()) - Date.parse(book.docModified) > 60000;
+// A fingerprint of what Io can see of the Doc (each tab's id, name, text and styles), taken after every save
+// and load. Google can move the revisionId with no edit, so a moved revisionId is checked against it. Drive's
+// modified time cannot tell: with real Google it lagged minutes behind edits (15 Oct 2026).
+async function docSig(doc) {
+  // Duplicate tabs left by two devices are not an edit: Io removes them itself.
+  const s = JSON.stringify(docSheets(doc, {}).filter(x => !dupTab(x.tabId, x.title)).map(x => [x.tabId, x.title, x.html]));
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(h)].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+// Was the Doc changed in Google since Io last saved or loaded it? Reads the whole Doc and returns it too.
+async function docChanged() {
+  const doc = await fullDoc(book.docId);
+  if (book.docSig) return { changed: await docSig(doc) !== book.docSig, doc };
+  // A book last saved before fingerprints: Drive's modified time, as before, this once.
+  const t = (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=modifiedTime&supportsAllDrives=true`)).modifiedTime;
+  return { changed: !book.docModified || Date.parse(t) - Date.parse(book.docModified) > 60000, doc };
+}
 
 async function pushDoc(interactive) {
   const snapAt = Date.now();
@@ -1270,14 +1284,15 @@ async function pushDoc(interactive) {
     catch (e) {
       if (e.status !== 404) throw e;
       await missing(`Google Doc "${docName()}"`, interactive);
-      book.docId = null; book.revisionId = null; book.docModified = null;
+      book.docId = null; book.revisionId = null; book.docSig = null;
     }
   }
-  // Google can change a revisionId with no edit, so a change is confirmed by Drive's modified time.
-  if (doc && book.revisionId && doc.revisionId !== book.revisionId && await docChanged()) {
+  // Google can change a revisionId with no edit, so a change is confirmed by the Doc's content.
+  if (doc && book.revisionId && doc.revisionId !== book.revisionId && (await docChanged()).changed) {
     if (!interactive) { book.conflict = true; return; }
     if (!await ask({ title: 'Changed in Google Docs', text: `"${docName()}" was changed in Google Docs since Io last saved it. Overwrite it with Io's version? Google keeps the changed version in its version history. To take the changes instead, use Load from Google in Settings.`, ok: 'Overwrite', danger: true })) return;
   }
+  if (doc) book.revisionId = doc.revisionId;
   if (!doc) {
     if (book.linked) book.title = book.docTitle || book.title;
     book.linked = false;
@@ -1332,7 +1347,9 @@ async function pushDoc(interactive) {
     t.tabTitle = t.name;
     t.pushedAt = Date.now();
   }
-  book.docModified = await docTime();
+  // The Doc as Io left it. If anything but Io's own writes came in meanwhile, '?' leaves it for the next check.
+  const after = await fullDoc(book.docId);
+  book.docSig = after.revisionId === book.revisionId ? await docSig(after) : '?';
   book.pushedAt = Date.now();
   book.conflict = false;
 }
@@ -1553,7 +1570,7 @@ async function openDocFile(f) {
     }));
     const b = {
       id: uid(), title: doc.title.slice(0, 80) || 'Untitled', titleAt: now, active: tabs[0].id, tabs, docVer: 2,
-      linked: true, docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, pushedAt: now, viewOnly: !canEdit,
+      linked: true, docId: f.id, docTitle: doc.title, revisionId: doc.revisionId, docSig: await docSig(doc), pushedAt: now, viewOnly: !canEdit,
     };
     await dbPut([[bookKey(b.id), b], ...tabs.map((t, i) => ['tab:' + t.id, sheets[i].html])]);
     toast(`Opened "${doc.title}" as a new book, ${tabs.length} sheet${tabs.length === 1 ? '' : 's'}${canEdit ? '' : '. You can only view it, so it is read-only here'}.`);
@@ -1565,9 +1582,10 @@ async function openDocFile(f) {
 
 // Takes the Google Doc's version of every tab: matching sheets are replaced, new tabs become sheets.
 // Replaces the sheets with the Doc's tabs. Sheets in `keep` (Io edits not yet in the Doc) stay as "(Io version)" copies.
-async function loadDoc(keep = []) {
+async function loadDoc(keep = [], doc) {
   await flush();
-  const doc = await fullDoc(book.docId), now = Date.now(), puts = [];
+  doc ||= await fullDoc(book.docId);
+  const now = Date.now(), puts = [];
   for (const t of keep) {
     const c = { ...t, id: uid(), kind: 'notes', name: t.name + ' (Io version)', rev: uid(), baseRev: null, docTab: null, tabTitle: null, syncedAt: 0, pushedAt: 0 };
     puts.push(['tab:' + c.id, await tabHtml(t)]);
@@ -1584,8 +1602,7 @@ async function loadDoc(keep = []) {
     editors[t.id]?.remove();
     delete editors[t.id];
   }
-  Object.assign(book, { revisionId: doc.revisionId, conflict: false, pushedAt: now });
-  try { book.docModified = await docTime(); } catch {}
+  Object.assign(book, { revisionId: doc.revisionId, docSig: await docSig(doc), conflict: false, pushedAt: now });
   await dbPut([...puts, [bookKey(), book]]);
   await openTab(book.active);
   renderSync();
@@ -1598,9 +1615,10 @@ async function pullDoc() {
   let doc;
   try { doc = await getDoc(book.docId, 'revisionId'); }
   catch (e) { if (e.status === 404) return; throw e; }
-  if (doc.revisionId === book.revisionId || !await docChanged()) {
+  const c = doc.revisionId !== book.revisionId && await docChanged();
+  if (!c || !c.changed) {
     // Not changed (Google can move the revisionId with no edit): note it, and clear an old warning.
-    book.revisionId = doc.revisionId;
+    if (c) Object.assign(book, { revisionId: c.doc.revisionId, docSig: await docSig(c.doc) });
     book.conflict = false;
     return;
   }
@@ -1610,7 +1628,7 @@ async function pullDoc() {
     text: `"${docName()}" was changed in Google Docs, and ${mine.length === 1 ? `the sheet "${mine[0].name}" has` : `${mine.length} sheets have`} edits here not yet saved to it. Load from Google? Io's version${mine.length === 1 ? ' is' : 's are'} kept as "(Io version)" sheets. Or keep Io's, and Save overwrites the Doc.`,
     ok: 'Load from Google', cancel: "Keep Io's",
   })) { book.conflict = true; return; }
-  await loadDoc(mine);
+  await loadDoc(mine, mine.length ? null : c.doc);
   toast('Loaded the latest from Google Docs.');
 }
 
