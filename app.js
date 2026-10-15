@@ -1267,13 +1267,28 @@ async function docSig(doc) {
   return [...new Uint8Array(h)].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join('');
 }
 // Was the Doc changed in Google since Io last saved or loaded it? Reads the whole Doc and returns it too.
+// `other`: another Io device is saving it and its data file has not arrived yet (see otherSave).
 async function docChanged() {
   const doc = await fullDoc(book.docId);
-  if (book.docSig) return { changed: await docSig(doc) !== book.docSig, doc };
-  // A book last saved before fingerprints: Drive's modified time, as before, this once.
-  const t = (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=modifiedTime&supportsAllDrives=true`)).modifiedTime;
-  return { changed: !book.docModified || Date.parse(t) - Date.parse(book.docModified) > 60000, doc };
+  let changed;
+  if (book.docSig) changed = await docSig(doc) !== book.docSig;
+  else {
+    // A book last saved before fingerprints: Drive's modified time, as before, this once.
+    const t = (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=modifiedTime&supportsAllDrives=true`)).modifiedTime;
+    changed = !book.docModified || Date.parse(t) - Date.parse(book.docModified) > 60000;
+  }
+  return { changed, other: changed && await otherSave(), doc };
 }
+// Io marks its own Doc before writing to it (appProperty ioBusy = device:time). Another device's save shows in
+// the Doc before its data file (with the new revisionId and docSig) arrives: that is not an edit in Google.
+const BUSY_FOR = 5 * 60000;
+async function otherSave() {
+  if (book.linked) return false;
+  const p = (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=appProperties&supportsAllDrives=true`)).appProperties || {};
+  const [by, at] = (p.ioBusy || '').split(':');
+  return !!by && by !== DEVICE && +at > (book.pushedAt || 0) && Date.now() - +at < BUSY_FOR;
+}
+const markBusy = () => gfetch('PATCH', `${DRIVE}/files/${book.docId}?fields=id`, { appProperties: { ioBusy: DEVICE + ':' + Date.now() } }).catch(() => {});
 
 async function pushDoc(interactive) {
   const snapAt = Date.now();
@@ -1288,7 +1303,14 @@ async function pushDoc(interactive) {
     }
   }
   // Google can change a revisionId with no edit, so a change is confirmed by the Doc's content.
-  if (doc && book.revisionId && doc.revisionId !== book.revisionId && (await docChanged()).changed) {
+  const c = doc && book.revisionId && doc.revisionId !== book.revisionId && await docChanged();
+  if (c?.other) {
+    await syncData(interactive);
+    if (book.revisionId !== doc.revisionId) {
+      if (interactive) toast('Another device is saving this book to Google. Io will save it in a moment.');
+      return 'wait';
+    }
+  } else if (c?.changed) {
     if (!interactive) { book.conflict = true; return; }
     if (!await ask({ title: 'Changed in Google Docs', text: `"${docName()}" was changed in Google Docs since Io last saved it. Overwrite it with Io's version? Google keeps the changed version in its version history. To take the changes instead, use Load from Google in Settings.`, ok: 'Overwrite', danger: true })) return;
   }
@@ -1327,7 +1349,9 @@ async function pushDoc(interactive) {
     if (t.docTab && have.get(t.docTab).title !== t.name) reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.docTab, title: t.name }, fields: 'title' } });
   }
   for (const id of book.dropTabs || []) if (have.has(id) && !book.tabs.some(t => t.docTab === id)) reqs.push({ deleteTab: { tabId: id } });
+  let marked = book.linked;
   const write = async requests => {
+    if (!marked) { marked = true; await markBusy(); }
     const r = await gfetch('POST', `${DOCS}/${book.docId}:batchUpdate`, { requests });
     book.revisionId = r.writeControl?.requiredRevisionId || null;
     return r;
@@ -1391,10 +1415,10 @@ async function pushNow(interactive) {
         setViewOnly(true);
         if (interactive) toast(`You can now only view "${docName()}" in Google Docs, so Io did not save to it.`);
       } else {
-        await pushDoc(interactive);
-        book.docsAt = Date.now();
+        const wait = await pushDoc(interactive) === 'wait';
+        if (!wait) book.docsAt = Date.now();
         await syncData(interactive);
-        if (interactive && !book.conflict) toast('Saved to Google.');
+        if (interactive && !wait && !book.conflict) toast('Saved to Google.');
       }
     } else if (interactive) toast('Saved to Google. The Google Doc is up to date.');
   } catch (e) {
@@ -1616,6 +1640,8 @@ async function pullDoc() {
   try { doc = await getDoc(book.docId, 'revisionId'); }
   catch (e) { if (e.status === 404) return; throw e; }
   const c = doc.revisionId !== book.revisionId && await docChanged();
+  // Another device's save: its data file brings the Doc's new state, now or at the next sync.
+  if (c?.other) return syncData(false);
   if (!c || !c.changed) {
     // Not changed (Google can move the revisionId with no edit): note it, and clear an old warning.
     if (c) Object.assign(book, { revisionId: c.doc.revisionId, docSig: await docSig(c.doc) });
