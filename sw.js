@@ -1,4 +1,4 @@
-const CACHE = 'io-shell-23';
+const CACHE = 'io-shell-24';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
@@ -10,6 +10,8 @@ self.addEventListener('activate', e => {
     .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
+
+self.addEventListener('message', e => { if (e.data === 'version') e.source.postMessage({ version: CACHE }); });
 
 self.addEventListener('fetch', e => {
   const req = e.request;

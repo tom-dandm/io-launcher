@@ -9,7 +9,7 @@ const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const SCOPE_DOCS = SCOPE + ' https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.metadata.readonly';
 const GDOC = 'application/vnd.google-apps.document';
 const PUSH_EVERY = 120000;
-const DOCS_EVERY = 15 * 60000;
+const DOCS_EVERY = 5 * 60000;
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const DATA_NAME = 'Io data.json.gz';
@@ -151,6 +151,7 @@ function onInput() {
   const ed = curEd(), t = curTab();
   normalise(ed);
   t.updatedAt = Date.now();
+  typed = true;
   if (t.rev && t.rev === t.baseRev) addPast(t, t.rev);
   t.rev = uid();
   dirty.add(t.id);
@@ -808,6 +809,7 @@ const G = {
   token: null,
   exp: 0,
   busy: false,
+  fresh: true,
   valid() { return this.token && Date.now() < this.exp - 60000; },
 };
 try {
@@ -1025,6 +1027,8 @@ async function mergeData(remote) {
   }
   let shown = false;
   const drop = id => {
+    const d = tabById(id)?.docTab;
+    if (d && !book.linked) book.dropTabs = [...new Set([...(book.dropTabs || []), d])];
     editors[id]?.remove();
     delete editors[id];
     dirty.delete(id);
@@ -1088,7 +1092,11 @@ async function mergeData(remote) {
       puts.push(['tab:' + c.id, html]);
     }
     if ((r.nameAt || 0) > (t.nameAt || 0)) { t.name = r.name; t.nameAt = r.nameAt; }
-    if ((r.pushedAt || 0) > (t.pushedAt || 0)) for (const k of ['docTab', 'tabTitle', 'syncedAt', 'pushedAt']) t[k] = r[k];
+    if ((r.pushedAt || 0) > (t.pushedAt || 0)) {
+      // Both devices gave this sheet a Doc tab: keep theirs, remove ours from the Doc.
+      if (t.docTab && r.docTab && t.docTab !== r.docTab) book.dropTabs = [...new Set([...(book.dropTabs || []), t.docTab])];
+      for (const k of ['docTab', 'tabTitle', 'syncedAt', 'pushedAt']) t[k] = r[k];
+    }
   }
   if (!book.tabs.length) book.tabs = newBook().tabs;
   await dbPut(puts);
@@ -1223,6 +1231,9 @@ function docRequests(m, docEnd, tabId, clean) {
 
 // One Google Doc per book, one Doc tab per sheet (sheet.docTab is the Doc's tabId).
 const docName = () => book.linked ? book.docTitle : book.title;
+// A Doc tab no sheet uses, named like a sheet that has its own tab: a duplicate left when two devices
+// both added a tab for the same new sheet.
+const dupTab = (id, title) => !book.tabs.some(t => t.docTab === id) && book.tabs.some(t => t.docTab && t.docTab !== id && t.name === title);
 const tabNeeds = t => !t.docTab || t.updatedAt > (t.syncedAt || 0) || t.tabTitle !== t.name;
 const needsDoc = () => !book.docId || book.tabs.some(tabNeeds) || !!book.dropTabs?.length || book.docTitle !== docName();
 
@@ -1289,8 +1300,14 @@ async function pushDoc(interactive) {
   for (const t of book.tabs) if (t.docTab && !have.has(t.docTab)) t.docTab = null;
   // A new Doc comes with one empty tab: the first sheet takes it.
   if (made) { const spare = [...have.keys()].find(id => !book.tabs.some(t => t.docTab === id)), t = book.tabs.find(x => !x.docTab); if (spare && t) t.docTab = spare; }
+  // A sheet with no tab yet takes an unused tab of its name (another device may have just added it).
+  for (const t of book.tabs) if (!t.docTab) {
+    const id = [...have.keys()].find(id => have.get(id).title === t.name && !book.tabs.some(x => x.docTab === id) && !(book.dropTabs || []).includes(id));
+    if (id) { t.docTab = id; t.syncedAt = 0; }
+  }
   const adds = book.tabs.filter(t => !t.docTab);
   const reqs = adds.map(t => ({ addDocumentTab: { tabProperties: { title: t.name } } }));
+  if (!book.linked) for (const [id, v] of have) if (dupTab(id, v.title) && !(book.dropTabs || []).includes(id)) book.dropTabs = [...(book.dropTabs || []), id];
   for (const t of book.tabs) {
     if (t.docTab && have.get(t.docTab).title !== t.name) reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.docTab, title: t.name }, fields: 'title' } });
   }
@@ -1339,6 +1356,11 @@ async function pushNow(interactive) {
       const was = book.viewOnly;
       setViewOnly(!await canEditDoc(book.docId));
       if (was && !book.viewOnly) return toast(`You can now edit "${docName()}". Use Load from Google (Settings) first to get the latest version.`);
+    }
+    if (G.fresh) {
+      G.fresh = false;
+      if (!book.viewOnly) await syncData(interactive);
+      await pullDoc();
     }
     if (book.viewOnly) {
       if (interactive) toast(`You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
@@ -1542,26 +1564,62 @@ async function openDocFile(f) {
 }
 
 // Takes the Google Doc's version of every tab: matching sheets are replaced, new tabs become sheets.
+// Replaces the sheets with the Doc's tabs. Sheets in `keep` (Io edits not yet in the Doc) stay as "(Io version)" copies.
+async function loadDoc(keep = []) {
+  await flush();
+  const doc = await fullDoc(book.docId), now = Date.now(), puts = [];
+  for (const t of keep) {
+    const c = { ...t, id: uid(), kind: 'notes', name: t.name + ' (Io version)', rev: uid(), baseRev: null, docTab: null, tabTitle: null, syncedAt: 0, pushedAt: 0 };
+    puts.push(['tab:' + c.id, await tabHtml(t)]);
+    book.tabs.push(c);
+  }
+  for (const s of docSheets(doc, {})) {
+    if ((book.dropTabs || []).includes(s.tabId)) continue;
+    if (dupTab(s.tabId, s.title)) { if (!book.linked) book.dropTabs = [...(book.dropTabs || []), s.tabId]; continue; }
+    let t = book.tabs.find(x => x.docTab === s.tabId);
+    if (!t) { t = { id: uid(), kind: 'notes', fixes: 0, docTab: s.tabId }; book.tabs.push(t); }
+    addPast(t, t.rev, t.baseRev);
+    Object.assign(t, { name: s.title.slice(0, 60), tabTitle: s.title.slice(0, 60), nameAt: now, rev: uid(), updatedAt: now, syncedAt: now, pushedAt: now });
+    puts.push(['tab:' + t.id, s.html]);
+    editors[t.id]?.remove();
+    delete editors[t.id];
+  }
+  Object.assign(book, { revisionId: doc.revisionId, conflict: false, pushedAt: now });
+  try { book.docModified = await docTime(); } catch {}
+  await dbPut([...puts, [bookKey(), book]]);
+  await openTab(book.active);
+  renderSync();
+  renderDocLinks();
+}
+
+// First thing on open (and on coming back to Io): if the Doc was changed in Google, load it.
+async function pullDoc() {
+  if (!book.docId || !book.revisionId || book.linked && !hasDocs()) return;
+  let doc;
+  try { doc = await getDoc(book.docId, 'revisionId'); }
+  catch (e) { if (e.status === 404) return; throw e; }
+  if (doc.revisionId === book.revisionId || !await docChanged()) {
+    // Not changed (Google can move the revisionId with no edit): note it, and clear an old warning.
+    book.revisionId = doc.revisionId;
+    book.conflict = false;
+    return;
+  }
+  const mine = book.viewOnly ? [] : book.tabs.filter(t => t.docTab && t.updatedAt > (t.syncedAt || 0));
+  if (mine.length && !await ask({
+    title: 'Changed in Google Docs',
+    text: `"${docName()}" was changed in Google Docs, and ${mine.length === 1 ? `the sheet "${mine[0].name}" has` : `${mine.length} sheets have`} edits here not yet saved to it. Load from Google? Io's version${mine.length === 1 ? ' is' : 's are'} kept as "(Io version)" sheets. Or keep Io's, and Save overwrites the Doc.`,
+    ok: 'Load from Google', cancel: "Keep Io's",
+  })) { book.conflict = true; return; }
+  await loadDoc(mine);
+  toast('Loaded the latest from Google Docs.');
+}
+
 async function reloadFromDoc() {
   if (!book.docId) return;
   if (!await ask({ title: 'Load from Google?', text: `Replace this book's sheets with what is in "${docName()}" now? Edits made in Io since it was last saved to Google will be lost. Sheets with no tab in the Doc stay.`, ok: 'Load from Google', danger: true })) return;
   try {
     if (!G.valid() || book.linked && !hasDocs()) await signIn(book.linked ? SCOPE_DOCS : wantScope());
-    await flush();
-    const doc = await fullDoc(book.docId), now = Date.now(), puts = [];
-    for (const s of docSheets(doc, {})) {
-      let t = book.tabs.find(x => x.docTab === s.tabId);
-      if (!t) { t = { id: uid(), kind: 'notes', fixes: 0, docTab: s.tabId }; book.tabs.push(t); }
-      Object.assign(t, { name: s.title.slice(0, 60), tabTitle: s.title.slice(0, 60), nameAt: now, rev: uid(), updatedAt: now, syncedAt: now, pushedAt: now });
-      puts.push(['tab:' + t.id, s.html]);
-      editors[t.id]?.remove();
-      delete editors[t.id];
-    }
-    Object.assign(book, { revisionId: doc.revisionId, conflict: false, pushedAt: now });
-    await dbPut([...puts, [bookKey(), book]]);
-    await openTab(book.active);
-    renderSync();
-    renderDocLinks();
+    await loadDoc();
     toast('Loaded from Google.');
   } catch (e) {
     toast('Could not load the Doc: ' + e.message);
@@ -1911,6 +1969,7 @@ function wire() {
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
   $('#pushBtn').addEventListener('click', () => pushAll(true));
+  $('#updateBtn').addEventListener('click', checkUpdate);
   $('#backupBtn').addEventListener('click', backup);
   $('#backupDirBtn').addEventListener('click', chooseBackupDir);
   $('#backupNowBtn').addEventListener('click', () => autoBackup(true));
@@ -1926,8 +1985,8 @@ function wire() {
     layout();
   }));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { clearTimeout(timers.book); dbPut([[bookKey(), book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
-    else if (!renewByPage()) { pushAll(false); autoBackup(); }
+    if (document.hidden) { clearTimeout(timers.book); book.docsAt = 0; dbPut([[bookKey(), book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
+    else if (!renewByPage()) { G.fresh = true; pushAll(false); autoBackup(); }
   });
   addEventListener('pagehide', flush);
   setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); autoBackup(); }, PUSH_EVERY);
@@ -1964,6 +2023,57 @@ async function renameTab(id) {
   saveBook();
   renderTabs();
   renderSync();
+}
+
+// App updates. sw.js installs a new version in the background (skipWaiting + claim), then the page
+// reloads into it: by itself in the first 20 seconds if nothing was typed, otherwise from the banner
+// or Settings > Check for updates. Saves first.
+let typed = false, swReg = null, updateReady = false, updateWanted = false;
+const openedAt = Date.now();
+async function applyUpdate() {
+  el.stage.inert = true;
+  clearTimeout(timers.book);
+  await flush();
+  await dbPut([[bookKey(), book]]);
+  location.reload();
+}
+function askVersion() { navigator.serviceWorker?.controller?.postMessage('version'); }
+function wireUpdates() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const had = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data?.version) $('#ioVersion').textContent = e.data.version.replace('io-shell-', 'Version '); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    askVersion();
+    if (!had && !updateWanted) return;
+    if (updateWanted || Date.now() - openedAt < 20000 && !typed) return applyUpdate();
+    updateReady = true;
+    renderUpdate();
+    el.banner.textContent = 'A new version of Io is ready. Click here to update.';
+    el.banner.dataset.sticky = '1';
+    el.banner.dataset.update = '1';
+    el.banner.hidden = false;
+  });
+  el.banner.addEventListener('click', () => { if (el.banner.dataset.update) applyUpdate(); });
+  navigator.serviceWorker.register('sw.js').then(r => {
+    swReg = r;
+    askVersion();
+    if (navigator.onLine) r.update().catch(() => {});
+  });
+}
+function renderUpdate(note = '') {
+  $('#updateBtn').textContent = updateReady ? 'Update now' : 'Check for updates';
+  $('#updateText').textContent = note;
+}
+async function checkUpdate() {
+  if (updateReady) return applyUpdate();
+  if (!swReg) return renderUpdate('Updates need Io to be opened from its web address.');
+  if (!navigator.onLine) return renderUpdate('Offline. Check again when you are online.');
+  renderUpdate('Checking…');
+  updateWanted = true;
+  try { await swReg.update(); } catch { updateWanted = false; return renderUpdate('Could not reach the Io website.'); }
+  if (swReg.installing || swReg.waiting) return renderUpdate('Updating…');
+  updateWanted = false;
+  renderUpdate('Io is up to date.');
 }
 
 function singleWindow() {
@@ -2007,7 +2117,7 @@ async function init() {
   if (pref.get('readSize', 0)) document.documentElement.style.setProperty('--read-size', pref.get('readSize', 20) + 'px');
   if (pref.get('reading', false) || book.viewOnly) setReading(true);
   navigator.storage?.persist?.();
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
+  wireUpdates();
   if (signInReturn() === null && renewByPage()) return;
   if (navigator.onLine && pref.get('signedIn', false) && !pageSignIn()) loadGis().catch(() => {});
   if (navigator.onLine && G.valid()) pushAll(false);
