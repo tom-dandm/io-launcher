@@ -507,17 +507,12 @@ button { cursor: pointer; }
     font-size: var(--read-size);
     line-height: 1.65;
     caret-color: transparent;
-    text-align: justify;
-    hyphens: auto;
   }
   :root.reading[data-read="dark"] .editor { color-scheme: dark; }
-  .reading .editor > p, .reading .editor > div { margin: 0; text-indent: 1.5em; }
-  .reading .editor > :first-child, .reading .editor > h1 + * { text-indent: 0; }
+  .reading .editor > p, .reading .editor > div { margin: 0 0 .6em; }
   .reading .editor > h1 {
     margin: 3.5em 0 1.4em;
     font-size: 1.45em;
-    text-align: center;
-    text-indent: 0;
   }
   .reading .editor > h1:first-child { margin-top: .5em; }
   :root.reading[data-read="dark"] .editor font[color="#a4262c" i] { color: #ff9a9a; }
@@ -548,7 +543,6 @@ button { cursor: pointer; }
 
 @media (max-width: 600px) {
   :root.reading { --read-size: 18px; }
-  .reading .editor { text-align: left; }
 }
 
 @media print {
