@@ -33,11 +33,10 @@
     <button type="button" data-cmd="clear" title="Clear marks and colour from the selection (Ctrl+\)">Clear</button>
     <span class="sep" aria-hidden="true"></span>
     <button type="button" id="spellBtn" title="Show spelling mistakes" aria-pressed="false">Spelling</button>
-    <button type="button" id="notesBtn" title="Chapter notes beside the page (Ctrl+Alt+N)" aria-pressed="true">Notes</button>
+    <button type="button" id="notesBtn" title="Chapter notes on the right (Ctrl+Alt+N)" aria-pressed="true">Notes</button>
   </div>
   <div class="bar-end">
     <div class="read-ctl" role="group" aria-label="Reading">
-      <button type="button" class="sync-btn" id="readAa" title="Text size and page colour" aria-haspopup="true" aria-expanded="false" aria-controls="readPop">Aa</button>
       <button type="button" class="sync-btn" id="readDone" title="Back to writing (Esc)">Done</button>
     </div>
     <button type="button" class="sync-btn" id="readBtn" title="Reading mode (Ctrl+Alt+R)">Read</button>
@@ -56,8 +55,12 @@
     <ol class="toc fixes" id="fixes"></ol>
   </nav>
   <main class="scroller" id="scroller">
-    <div class="stage" id="stage"><div class="notes" id="notes" role="group" aria-label="Chapter notes"></div></div>
+    <div class="stage" id="stage"></div>
   </main>
+  <aside class="notes" id="notesSide" aria-label="Chapter notes">
+    <h2 class="side-h">Chapter notes</h2>
+    <ol class="note-col" id="notes"></ol>
+  </aside>
 </div>
 
 <footer class="foot">
@@ -82,18 +85,6 @@
   <button type="button" data-color="red" style="--ink:#a4262c" title="Red (F1)" aria-label="Red"></button>
   <button type="button" data-color="green" style="--ink:#1e6b34" title="Green (F2)" aria-label="Green"></button>
   <button type="button" data-color="blue" style="--ink:#1e3a8a" title="Blue (F3)" aria-label="Blue"></button>
-</div>
-
-<div class="read-pop" id="readPop" role="group" aria-label="Text size and page colour" hidden>
-  <div class="read-row">
-    <button type="button" id="readSmaller" aria-label="Smaller text" title="Smaller text"><span style="font-size:13px">A</span></button>
-    <button type="button" id="readBigger" aria-label="Bigger text" title="Bigger text"><span style="font-size:20px">A</span></button>
-  </div>
-  <div class="read-row">
-    <button type="button" data-read="light" title="White page">Light</button>
-    <button type="button" data-read="sepia" title="Sepia page">Sepia</button>
-    <button type="button" data-read="dark" title="Dark page">Dark</button>
-  </div>
 </div>
 
 <div class="sel-pop" id="selPop" role="toolbar" aria-label="Selection" hidden>
@@ -160,7 +151,7 @@
       <dt>F1 / F2 / F3</dt><dd>Red / green / blue text (press again for the default colour)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
       <dt>Ctrl+Alt+R</dt><dd>Reading mode (Esc goes back to writing; Space / Shift+Space turn the page)</dd>
-      <dt>Ctrl+Alt+N</dt><dd>Show or hide chapter notes beside the page</dd>
+      <dt>Ctrl+Alt+N</dt><dd>Show or hide chapter notes on the right</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
       <dt>&#9662; on a sheet tab, or right-click it</dt><dd>Rename or delete the sheet (double-click also renames)</dd>

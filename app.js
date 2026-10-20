@@ -475,6 +475,10 @@ function onScroll() {
       el.toc.children[activeHead]?.classList.remove('on');
       el.toc.children[idx]?.classList.add('on');
       el.toc.children[idx]?.scrollIntoView({ block: 'nearest' });
+      const cards = [...noteCards.values()];
+      cards[activeHead]?.classList.remove('on');
+      cards[idx]?.classList.add('on');
+      if (!el.notes.contains(document.activeElement)) cards[idx]?.scrollIntoView({ block: 'nearest' });
       activeHead = idx;
     }
     const ch = curTab().kind === 'ms' && idx >= 0 ? `Chapter ${idx + 1} of ${heads.length}` : '';
@@ -552,7 +556,6 @@ function selectChapter(i) {
 
 // Chapter notes live on the chapter heading (data-note), so they move, sync and back up with it.
 // Google Docs never sees them; loadDoc carries them over (carryNotes).
-const NOTES_W = 240, NOTES_GAP = 24;
 const notesShown = () => !!book && pref.get('notes', true) && curTab()?.kind === 'ms' && !reading() && !phone();
 let noteCards = new Map();
 
@@ -584,22 +587,27 @@ function noteBox(h, label) {
   ta.readOnly = !!book.viewOnly;
   ta.placeholder = 'To mention, foreshadow, fix...';
   ta.setAttribute('aria-label', 'Notes for ' + label);
-  ta.addEventListener('input', () => { setNote(h, ta.value); later('notes', 30, placeNotes); });
+  ta.addEventListener('input', () => setNote(h, ta.value));
   return ta;
 }
 
 function noteCard(h) {
-  const c = document.createElement('div'), label = h.textContent.trim() || 'this chapter';
+  const c = document.createElement('li'), label = h.textContent.trim() || 'this chapter';
   c.className = 'note-card';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'note-go';
+  go.title = 'Go to this chapter';
+  go.addEventListener('click', () => goTo(h, false));
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'note-add';
   add.textContent = '+ Note';
   add.title = 'Add a note to ' + label;
   const ta = noteBox(h, label);
-  add.addEventListener('click', () => { c.classList.add('open'); ta.focus(); placeNotes(); });
-  ta.addEventListener('blur', () => { c.classList.toggle('open', !!ta.value.trim()); placeNotes(); });
-  c.append(add, ta);
+  add.addEventListener('click', () => { c.classList.add('open'); ta.focus(); });
+  ta.addEventListener('blur', () => c.classList.toggle('open', !!ta.value.trim()));
+  c.append(go, add, ta);
   return c;
 }
 
@@ -614,26 +622,17 @@ function renderNotes() {
     cards.set(h, noteCards.get(h) || noteCard(h));
   }
   const list = [...cards.values()];
+  if (!list.length) list.push(col.querySelector('.empty') || Object.assign(document.createElement('li'), {
+    className: 'empty', textContent: 'Use Chapter style for headings, then each chapter gets its own notes.' }));
   if (list.length !== col.children.length || list.some((c, i) => col.children[i] !== c)) col.replaceChildren(...list);
   noteCards = cards;
+  let i = 0;
   for (const [h, c] of cards) {
     const ta = c.lastChild, note = h.dataset.note || '';
+    c.firstChild.textContent = layoutInfo.heads[i].text;
+    c.classList.toggle('on', i++ === activeHead);
     if (ta !== document.activeElement && ta.value !== note) ta.value = note;
     if (ta !== document.activeElement) c.classList.toggle('open', !!note);
-  }
-  placeNotes();
-}
-
-// Each card starts level with its chapter heading, or below the card before it.
-function placeNotes() {
-  const { heads, k } = layoutInfo;
-  let y = 0;
-  for (const h of heads) {
-    const c = noteCards.get(h.el);
-    if (!c) continue;
-    const top = Math.max(h.y, y);
-    if (c.style.top !== top + 'px') c.style.top = top + 'px';
-    y = top + c.getBoundingClientRect().height / (k || 1) + 12;
   }
 }
 
@@ -682,7 +681,6 @@ function carryNotes(from, to) {
 }
 
 const reading = () => document.documentElement.classList.contains('reading');
-const READ_THEME = { light: '#fbfaf7', sepia: '#f4ecd8', dark: '#111110' };
 
 // Keeps the paragraph at the top of the screen in place while the text reflows.
 function keepPlace(change) {
@@ -710,25 +708,11 @@ function setReading(on) {
     el.shell.classList.remove('nav-open');
     renderNotesMode();
     refit();
-    setReadTheme(pref.get('readTheme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    $('meta[name="theme-color"]').content = on ? '#f4ecd8' : '#f3f2f1';
   });
   if (!book.viewOnly) pref.set('reading', on);
   $('#colorPop').hidden = true;
-  $('#readPop').hidden = true;
   renderSelPop();
-}
-
-function setReadTheme(t) {
-  document.documentElement.dataset.read = t;
-  for (const b of document.querySelectorAll('[data-read]')) if (b.tagName === 'BUTTON') b.setAttribute('aria-pressed', b.dataset.read === t);
-  $('meta[name="theme-color"]').content = reading() ? READ_THEME[t] : '#f3f2f1';
-}
-
-function setReadSize(step) {
-  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--read-size')) || 19;
-  const px = Math.min(32, Math.max(14, now + step * 2));
-  keepPlace(() => document.documentElement.style.setProperty('--read-size', px + 'px'));
-  pref.set('readSize', px);
 }
 
 function setSpell(on) {
@@ -813,7 +797,7 @@ function stepZoom(dir) {
   setZoom(next ?? ZOOMS[i] ?? zoom);
 }
 function fitZoom() {
-  const w = el.scroller.clientWidth - 32, need = PAGE_W + (notesShown() ? NOTES_GAP + NOTES_W : 0);
+  const w = el.scroller.clientWidth - 32, need = PAGE_W;
   return w < need ? Math.max(.3, w / need) : 1;
 }
 function refit() {
@@ -2049,25 +2033,9 @@ function wire() {
 
   $('#readBtn').addEventListener('click', () => setReading(true));
   $('#readDone').addEventListener('click', () => setReading(false));
-  const rpop = $('#readPop'), aa = $('#readAa');
-  const showRead = on => {
-    rpop.hidden = !on;
-    aa.setAttribute('aria-expanded', on);
-    if (!on) return;
-    const r = aa.getBoundingClientRect();
-    rpop.style.left = Math.max(8, Math.min(r.right - rpop.offsetWidth, innerWidth - rpop.offsetWidth - 8)) + 'px';
-    rpop.style.top = r.bottom + 4 + 'px';
-  };
-  aa.addEventListener('click', () => showRead(rpop.hidden));
-  rpop.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
-  document.addEventListener('pointerdown', e => { if (!rpop.hidden && !rpop.contains(e.target) && !aa.contains(e.target)) showRead(false); });
-  $('#readSmaller').addEventListener('click', () => setReadSize(-1));
-  $('#readBigger').addEventListener('click', () => setReadSize(1));
-  for (const b of document.querySelectorAll('button[data-read]')) b.addEventListener('click', () => { pref.set('readTheme', b.dataset.read); setReadTheme(b.dataset.read); });
   document.addEventListener('keydown', e => {
     if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === 'KeyR') { e.preventDefault(); setReading(!reading()); }
     else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === 'KeyN' && curTab().kind === 'ms') { e.preventDefault(); phone() || reading() ? openNotes() : setNotes(!pref.get('notes', true)); }
-    else if (e.key === 'Escape' && !rpop.hidden) showRead(false);
     else if (e.key === 'Escape' && reading() && $('#colorPop').hidden && !document.querySelector('dialog[open]')) setReading(false);
   });
   $('#navToggle').addEventListener('click', () => {
@@ -2297,7 +2265,6 @@ async function init() {
   wire();
   singleWindow();
   await openTab(book.active);
-  if (pref.get('readSize', 0)) document.documentElement.style.setProperty('--read-size', pref.get('readSize', 20) + 'px');
   if (pref.get('reading', false) || book.viewOnly) setReading(true);
   navigator.storage?.persist?.();
   wireUpdates();
