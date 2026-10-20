@@ -21,8 +21,8 @@ const $ = s => document.querySelector(s);
 const el = {
   stage: $('#stage'), scroller: $('#scroller'), shell: $('.shell'),
   toc: $('#toc'), fixes: $('#fixes'), fixCount: $('#fixCount'), tabs: $('#tabs'),
-  title: $('#title'), tools: $('#tools'), syncBtn: $('#syncBtn'), menu: $('#menu'),
-  stEdited: $('#stEdited'), stWords: $('#stWords'), stPage: $('#stPage'), stSync: $('#stSync'),
+  title: $('#title'), tools: $('#tools'), menu: $('#menu'),
+  stEdited: $('#stEdited'), stWords: $('#stWords'), stPage: $('#stPage'),
   zoomVal: $('#zoomVal'), banner: $('#banner'),
 };
 
@@ -582,7 +582,7 @@ function setReadTheme(t) {
 }
 
 function setReadSize(step) {
-  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--read-size')) || 20;
+  const now = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--read-size')) || 19;
   const px = Math.min(32, Math.max(14, now + step * 2));
   keepPlace(() => document.documentElement.style.setProperty('--read-size', px + 'px'));
   pref.set('readSize', px);
@@ -704,16 +704,8 @@ const AUTO_EVERY = 60 * 60 * 1000, AUTO_KEEP = 30;
 const autoSig = () => book.title + '|' + book.tabs.map(t => t.id + ':' + t.rev + ':' + t.name).join('|');
 const day = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-async function autoDir(ask) {
-  const dir = await dbGet('backupDir');
-  if (!dir) return null;
-  let p = await dir.queryPermission({ mode: 'readwrite' });
-  if (p === 'prompt' && ask && !autoDir.asked) {
-    autoDir.asked = true;
-    p = await dir.requestPermission({ mode: 'readwrite' }).catch(() => 'denied');
-  }
-  return p === 'granted' ? dir : null;
-}
+// Backups live in Io's own storage on this device (the origin private file system): no folder to pick, phones too.
+const backupDir = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('backups', { create: true });
 
 async function autoBackupHere(dir, name) {
   const blob = await gzip(await backupData());
@@ -727,22 +719,19 @@ async function autoBackupHere(dir, name) {
   return blob.size;
 }
 
-async function autoBackup(force = false, gesture = false) {
-  if (!window.showDirectoryPicker || autoBackup.busy || book.viewOnly && !force) return;
-  const last = pref.get('autoLast.' + book.id, null);
+async function autoBackup(force = false) {
+  if (!navigator.storage?.getDirectory || autoBackup.busy || book.viewOnly && !force) return;
+  const last = pref.get('backupLast.' + book.id, null);
   if (!force && last && (Date.now() - last.at < AUTO_EVERY || last.sig === autoSig())) return;
   autoBackup.busy = true;
   try {
-    if (force) autoDir.asked = false;
-    const dir = await autoDir(gesture || force);
-    if (!dir) { renderBackup(); return; }
+    const dir = await backupDir();
     if (!force) await new Promise(r => idle(r));
     await flush();
-    const sig = autoSig(), name = `${fileBase()} ${day(new Date())}.io.json.gz`;
+    const sig = autoSig(), name = `${book.id} ${day(new Date())}.io.json.gz`;
     let size = (await inBackground({ key: 'tabs', head: { io: 1, savedAt: Date.now(), book }, ids: book.tabs.map(t => t.id), fallback: {}, dir, name, keep: AUTO_KEEP }))?.size;
     if (size === undefined) size = await autoBackupHere(dir, name);
-    pref.set('autoLast.' + book.id, { at: Date.now(), sig, size, name });
-    if (force) toast(`Backed up to ${dir.name}/${name} (${kb(size)}).`);
+    pref.set('backupLast.' + book.id, { at: Date.now(), sig, size });
   } catch (e) {
     if (force) toast('Backup failed: ' + e.message);
   } finally {
@@ -753,33 +742,32 @@ async function autoBackup(force = false, gesture = false) {
 
 const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 
-async function chooseBackupDir() {
+function renderBackup() {
+  const last = pref.get('backupLast.' + book.id, null);
+  $('#autoText').textContent = !navigator.storage?.getDirectory ? 'This browser cannot keep backups. Your copy in Google is the backup. Download a copy to keep one yourself.'
+    : `Io backs up this book on this device every hour while you write: one backup a day, the last ${AUTO_KEEP} days kept.`
+      + (last ? ` Last backup ${when(last.at)}, ${kb(last.size)}.` : '');
+}
+
+async function openBackups() {
+  const f = document.createDocumentFragment(), files = [];
   try {
-    const dir = await showDirectoryPicker({ id: 'io-backup', mode: 'readwrite', startIn: 'documents' });
-    await dbPut([['backupDir', dir]]);
-    pref.set('autoLast.' + book.id, null);
-    autoBackup(true, true);
-  } catch (e) { if (e.name !== 'AbortError') toast(e.message); }
-}
-
-async function stopBackups() {
-  await dbPut([['backupDir', undefined]]);
-  pref.set('autoLast.' + book.id, null);
-  renderBackup();
-}
-
-async function renderBackup() {
-  const box = $('#autoBackup');
-  if (!window.showDirectoryPicker) { box.innerHTML = '<p class="hint">Automatic backups to a folder work in Chrome or Edge on a computer. On this device, your copy in Google is the backup.</p>'; return; }
-  const dir = await dbGet('backupDir');
-  const last = pref.get('autoLast.' + book.id, null);
-  const ok = dir && await dir.queryPermission({ mode: 'readwrite' }) === 'granted';
-  $('#autoText').textContent = !dir ? 'Io can save a backup to a folder you pick (OneDrive, a USB stick) every hour while you write. One file a day, the last 30 days kept.'
-    : `Backing up to the folder "${dir.name}" every hour while you write. One file a day for each book, the last ${AUTO_KEEP} days kept.`
-      + (last ? ` Last backup ${when(last.at)}, ${kb(last.size)}.` : '')
-      + (ok ? '' : ' Click anywhere in Io to let it write there again.');
-  $('#backupDirBtn').textContent = dir ? 'Change folder' : 'Choose backup folder';
-  $('#backupNowBtn').hidden = $('#backupStopBtn').hidden = !dir;
+    for await (const [n, h] of (await backupDir()).entries()) if (h.kind === 'file' && n.startsWith(book.id + ' ')) files.push([n, await h.getFile()]);
+  } catch {}
+  files.sort((a, b) => b[0].localeCompare(a[0]));
+  for (const [, file] of files) {
+    const li = document.createElement('li'), b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = '<span class="t"></span><span class="pg"></span>';
+    b.firstChild.textContent = when(file.lastModified);
+    b.lastChild.textContent = kb(file.size);
+    b.addEventListener('click', () => { $('#backups').close(); restore(file); });
+    li.append(b);
+    f.append(li);
+  }
+  if (!files.length) f.append(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'No backups of this book on this device yet.' }));
+  $('#backupList').replaceChildren(f);
+  if (!$('#backups').open) $('#backups').showModal();
 }
 
 async function restore(file) {
@@ -970,9 +958,9 @@ onmessage = async ({ data: j }) => {
     const str = JSON.stringify({ ...j.head, [j.key]: tabs });
     const blob = await new Response(new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
     if (!j.dir) return postMessage({ n: j.n, blob });
-    const w = await (await j.dir.getFileHandle(j.name, { create: true })).createWritable();
-    await w.write(blob);
-    await w.close();
+    const fh = await j.dir.getFileHandle(j.name, { create: true });
+    if (fh.createWritable) { const w = await fh.createWritable(); await w.write(blob); await w.close(); }
+    else { const h = await fh.createSyncAccessHandle(); h.truncate(0); h.write(new Uint8Array(await blob.arrayBuffer()), { at: 0 }); h.flush(); h.close(); }
     const old = [], pre = j.name.slice(0, -21);
     for await (const [n, h] of j.dir.entries()) if (h.kind === 'file' && n.endsWith('.io.json.gz') && n.slice(0, -21) === pre) old.push(n);
     old.sort((a, b) => b.slice(-21).localeCompare(a.slice(-21)));
@@ -1416,7 +1404,7 @@ async function pushNow(interactive) {
     if (book.linked && hasDocs() && (book.viewOnly === undefined || book.viewOnly && interactive)) {
       const was = book.viewOnly;
       setViewOnly(!await canEditDoc(book.docId));
-      if (was && !book.viewOnly) return toast(`You can now edit "${docName()}". Use Load from Google (Settings) first to get the latest version.`);
+      if (was && !book.viewOnly) return toast(`You can now edit "${docName()}". Press Sync now first to get the latest version.`);
     }
     let pulled;
     // Only while Io is on screen: a question about the Doc must not wait unseen and hold up every later save.
@@ -1426,12 +1414,12 @@ async function pushNow(interactive) {
       pulled = await pullDoc();
     }
     if (book.viewOnly) {
-      if (interactive && pulled !== 'loaded') toast(pulled === 'same' ? 'Io has the latest version from Google Docs.' : `You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
+      if (interactive && pulled !== 'loaded') toast(pulled === 'same' ? 'Io has the latest version from Google Docs.' : `You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Sync now gets the latest version.`);
       return;
     }
     await syncData(interactive);
     const docsDue = interactive || Date.now() - (book.docsAt || 0) >= DOCS_EVERY;
-    if (book.linked && !hasDocs()) { if (interactive) toast('Allow access to your Google Docs (Settings) to save this book back to its Doc.'); }
+    if (book.linked && !hasDocs()) { if (interactive) toast('Allow access to your Google Docs (Settings, Sign in) to save this book back to its Doc.'); }
     else if (docsDue && needsDoc() && (interactive || !book.conflict)) {
       if (book.linked && !await canEditDoc(book.docId)) {
         setViewOnly(true);
@@ -1455,39 +1443,25 @@ async function pushNow(interactive) {
 }
 
 function renderSync() {
-  const b = el.syncBtn;
-  const waiting = book.tabs.filter(tabNeeds).length;
-  const conflict = book.conflict;
-  const last = book.pushedAt || 0;
-  let label, state, note = '';
-  if (G.busy) { label = 'Saving…'; state = 'pending'; }
-  else if (G.error || conflict) {
-    label = 'Save to Google'; state = 'warn';
-    note = conflict ? 'Changed in Google Docs. Press Save to overwrite.' : G.error;
-  }
-  else if (book.viewOnly) { label = 'View only'; state = ''; }
-  else if (!G.valid() && pref.get('signedIn', false)) { label = 'Sign in to save'; state = waiting ? 'pending' : ''; }
-  else if (waiting) { label = 'Save to Google'; state = 'pending'; }
-  else { label = 'Google Doc'; state = 'ok'; }
-  b.textContent = label;
-  b.dataset.state = state;
-  $('#mSync').textContent = label;
-  $('#mSync').dataset.state = state;
-  $('#menuBtn').dataset.state = state === 'ok' ? '' : state;
-  if (!note && !G.valid() && !G.busy) note = pref.get('signedIn', false) ? 'Google sign-in expired. Click to renew.' : 'Not connected to Google. Click to sign in.';
-  const warn = !!note;
-  if (!navigator.onLine) note = 'Offline. Saved on this device.';
-  const lastTxt = book.viewOnly ? 'View only. Not saved to Google.' : book.dataAt ? 'Saved to Google ' + when(book.dataAt) : last ? 'Saved ' + when(last) : '';
-  el.stSync.textContent = note || lastTxt;
-  el.stSync.className = warn && navigator.onLine ? 'st-sync warn' : 'st-sync';
-  b.title = [lastTxt || 'Not saved to Google yet', waiting ? waiting + ' sheet(s) waiting' : ''].filter(Boolean).join('. ');
+  const conflict = book.conflict, on = G.valid(), was = pref.get('signedIn', false);
   // Tick: Io has the Doc's latest (checked on open and on coming back to Io). Otherwise a button to get it.
+  const ok = G.pulledAt && Date.now() - G.pulledAt < PULL_FOR && !G.error && !conflict && on && navigator.onLine;
+  const waiting = book.tabs.filter(tabNeeds).length;
+  const saved = book.dataAt ? 'Saved to Google ' + when(book.dataAt) + '.' : '';
+  let txt, state, title;
+  if (G.busy) { txt = 'Saving…'; state = 'busy'; title = 'Saving to Google.'; }
+  else if (!navigator.onLine) { txt = 'Offline'; state = ''; title = 'Offline. Saved on this device; Io saves to Google when you are back online.'; }
+  else if (!on) { txt = was ? 'Sign in again' : 'Sign in'; state = was ? 'warn' : 'out'; title = was ? 'Google sign-in has expired. Click to sign in again.' : 'Sign in to Google to save this book to Google Docs and your other devices.'; }
+  else if (conflict) { txt = 'Changed in Google'; state = 'warn'; title = 'The Google Doc was changed in Google Docs. Click to choose which version to keep.'; }
+  else if (G.error) { txt = 'Not saved'; state = 'warn'; title = 'Saving to Google failed: ' + G.error + ' Click to try again.'; }
+  else if (book.viewOnly) { txt = 'View only'; state = ok ? 'ok' : ''; title = 'You can only view this Doc, so Io does not save it. Click to get the latest.'; }
+  else if (ok) { txt = 'Up to date'; state = 'ok'; title = `Up to date with Google Docs (checked ${when(G.pulledAt)}). ${waiting ? 'New edits save to Google within 5 minutes. ' : ''}Click to check again.`; }
+  else { txt = 'Sync now'; state = ''; title = [saved, 'Click to get the latest from Google Docs and save.'].filter(Boolean).join(' '); }
   const p = $('#pullBtn');
-  const ok = G.pulledAt && Date.now() - G.pulledAt < PULL_FOR && !G.error && !conflict && G.valid() && navigator.onLine;
-  p.hidden = !book.docId;
-  p.dataset.state = G.busy ? 'busy' : ok ? 'ok' : '';
-  p.title = ok ? `Up to date with Google Docs (checked ${when(G.pulledAt)}). Click to check again.` : 'Get the latest from Google Docs';
-  p.setAttribute('aria-label', p.title);
+  p.hidden = on && !book.docId && !G.busy && !G.error;
+  p.dataset.state = state;
+  p.title = title;
+  $('#pullTxt').textContent = txt;
 }
 
 function renderDocLinks() {
@@ -1498,28 +1472,11 @@ function renderDocLinks() {
     a.href = `https://docs.google.com/document/d/${book.docId}/edit`;
     a.target = '_blank';
     a.rel = 'noopener';
-    a.textContent = docName();
-    li.append(a, ` (${book.tabs.length} tab${book.tabs.length === 1 ? '' : 's'}${book.viewOnly ? ', view only' : book.pushedAt ? ', saved ' + when(book.pushedAt) : ''})`);
+    a.textContent = 'Open "' + docName() + '" in Google Docs';
+    li.append(a);
     f.append(li);
   }
   $('#docLinks').replaceChildren(f);
-  $('#reloadBtn').hidden = !book.docId;
-  const old = book.oldDocs || [];
-  $('#oldDocs').hidden = !old.length;
-  $('#oldDocsText').textContent = `Before Io used Doc tabs, it made one Google Doc per sheet. ${old.length} of them are still in your Drive, no longer updated.`;
-}
-
-async function trashOldDocs() {
-  const old = book.oldDocs || [];
-  if (!await ask({ title: 'Move old Docs to the bin?', text: `Move ${old.length} old Google Doc${old.length === 1 ? '' : 's'} (${old.map(d => d.title).join(', ')}) to the Drive bin? Google keeps binned files for 30 days.`, ok: 'Move to bin', danger: true })) return;
-  try {
-    if (!G.valid()) await signIn();
-    for (const d of old) await gfetch('PATCH', `${DRIVE}/files/${d.id}?fields=id`, { trashed: true }).catch(e => { if (e.status !== 404 && e.status !== 403) throw e; });
-    book.oldDocs = [];
-    saveBook();
-    renderDocLinks();
-    toast('Old Docs moved to the bin.');
-  } catch (e) { toast('Could not move them: ' + e.message); }
 }
 
 // Old books had one Doc per sheet (sheet.docId). Those Docs stop being updated; the book gets one Doc with tabs.
@@ -1885,7 +1842,6 @@ function renderAccount() {
 
 function openMenu() {
   renderAccount();
-  $('#autoPush').checked = pref.get('autoPush', true);
   renderDocLinks();
   renderBackup();
   el.menu.showModal();
@@ -1923,7 +1879,7 @@ function wire() {
     const b = e.target.closest('button');
     if (!b) return;
     hidePops();
-    ({ mRead: () => setReading(!reading()), mBooks: openBooks, mSync: () => pushAll(true), mSpell: () => setSpell(!pref.get('spell', false)), mSettings: openMenu })[b.id]?.();
+    ({ mRead: () => setReading(!reading()), mBooks: openBooks, mSpell: () => setSpell(!pref.get('spell', false)), mSettings: openMenu })[b.id]?.();
   });
 
   el.toc.addEventListener('click', e => {
@@ -2012,18 +1968,11 @@ function wire() {
     else if (e.key === '0' && !e.shiftKey) { e.preventDefault(); setZoom(1); }
   });
 
-  el.syncBtn.addEventListener('click', () => pushAll(true));
-  $('#reloadBtn').addEventListener('click', () => { el.menu.close(); reloadFromDoc(); });
-  $('#oldDocsBtn').addEventListener('click', trashOldDocs);
   $('#booksBtn').addEventListener('click', openBooks);
   $('#newBookBtn').addEventListener('click', () => { $('#books').close(); newBookCmd(); });
   $('#openDocBtn').addEventListener('click', () => { $('#books').close(); openDocs(); });
   $('#openQ').addEventListener('input', e => later('openq', 300, () => listDocs(e.target.value.trim())));
   $('#openQ').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
-  el.stSync.addEventListener('click', () => {
-    if (!G.valid()) signIn().then(() => pushAll(false), e => toast(e.message));
-    else pushAll(true);
-  });
   document.addEventListener('click', renewOnClick, true);
   $('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#ask').close('ok'); } });
   $('#menuBtn').addEventListener('click', e => {
@@ -2048,17 +1997,16 @@ function wire() {
   pop.addEventListener('click', e => { const b = e.target.closest('[data-color]'); if (b) paint(b.dataset.color); });
   document.addEventListener('pointerdown', e => { if (!pop.hidden && !pop.contains(e.target) && !cbtn.contains(e.target)) showColors(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) showColors(false); });
-  $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
-  $('#pushBtn').addEventListener('click', () => pushAll(true));
-  $('#pullBtn').addEventListener('click', () => { G.fresh = true; G.freshAt = Date.now(); pushAll(true); });
+  $('#pullBtn').addEventListener('click', () => {
+    if (!G.valid()) return signIn().then(() => pushAll(false), e => toast(e.message));
+    G.fresh = true; G.freshAt = Date.now(); pushAll(true);
+  });
   $('#updateBtn').addEventListener('click', checkUpdate);
   $('#backupBtn').addEventListener('click', backup);
-  $('#backupDirBtn').addEventListener('click', chooseBackupDir);
-  $('#backupNowBtn').addEventListener('click', () => autoBackup(true));
-  $('#backupStopBtn').addEventListener('click', stopBackups);
-  document.addEventListener('click', () => autoBackup(false, true), true);
-  $('#restoreFile').addEventListener('change', e => { if (e.target.files[0]) restore(e.target.files[0]); e.target.value = ''; });
+  $('#restoreBtn').addEventListener('click', openBackups);
+  document.addEventListener('click', () => autoBackup(), true);
+  $('#restoreFile').addEventListener('change', e => { $('#backups').close(); if (e.target.files[0]) restore(e.target.files[0]); e.target.value = ''; });
 
   addEventListener('online', () => { renderSync(); pushAll(false); });
   addEventListener('offline', renderSync);
@@ -2074,7 +2022,7 @@ function wire() {
   // Coming back from another window (Google Docs side by side) fires focus but not visibilitychange.
   addEventListener('focus', () => { if (!document.hidden) checkDoc(); });
   addEventListener('pagehide', flush);
-  setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); autoBackup(); }, PUSH_EVERY);
+  setInterval(() => { if (!document.hidden) pushAll(false); autoBackup(); }, PUSH_EVERY);
 }
 
 function closeNavOnPhone() { el.shell.classList.remove('nav-open'); }

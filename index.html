@@ -2,7 +2,7 @@
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Io</title>
 <meta name="description" content="A fast, offline writing app that mirrors to Google Docs.">
 <meta name="robots" content="noindex, nofollow">
@@ -41,8 +41,7 @@
     </div>
     <button type="button" class="sync-btn" id="readBtn" title="Reading mode (Ctrl+Alt+R)">Read</button>
     <button type="button" class="sync-btn" id="booksBtn" title="Your books: switch, or start a new one">Books</button>
-    <button type="button" class="sync-btn" id="syncBtn" title="Save to Google Docs (Ctrl+S)">Google Doc</button>
-    <button type="button" class="icon-btn pull-btn" id="pullBtn" hidden aria-label="Get the latest from Google Docs" title="Get the latest from Google Docs"><svg class="i-pull" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg><svg class="i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+    <button type="button" class="icon-btn pull-btn" id="pullBtn" hidden><svg class="i-pull" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg><svg class="i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span id="pullTxt"></span></button>
     <button type="button" class="icon-btn" id="menuBtn" aria-label="Menu" title="Settings" aria-haspopup="true">&#8943;</button>
   </div>
 </header>
@@ -67,7 +66,6 @@
     <span id="stEdited"></span>
     <span id="stWords"></span>
     <span id="stPage"></span>
-    <button type="button" id="stSync" class="st-sync"></button>
   </div>
   <div class="zoom" role="group" aria-label="Zoom">
     <button type="button" class="icon-btn" id="zoomOut" aria-label="Zoom out" title="Zoom out (Ctrl+-)">&minus;</button>
@@ -124,7 +122,6 @@
 <div class="pop-menu" id="morePop" role="menu" aria-label="Menu" hidden>
   <button type="button" role="menuitem" id="mRead">Read</button>
   <button type="button" role="menuitem" id="mBooks">Books</button>
-  <button type="button" role="menuitem" id="mSync" class="m-sync">Google Doc</button>
   <button type="button" role="menuitem" id="mSpell" aria-pressed="false">Spelling</button>
   <button type="button" role="menuitem" id="mSettings">Settings</button>
 </div>
@@ -138,33 +135,16 @@
   <form method="dialog" class="menu-in">
     <h2>Settings</h2>
 
-    <h3>Google Docs</h3>
-    <p class="hint">Signed in, Io keeps your book in step across your devices and copies it to one Google Doc, one Doc tab per sheet.</p>
-    <p class="hint" id="gWho"></p>
-    <label class="check"><input type="checkbox" id="autoPush"> Save to Google automatically (every 2 minutes after a change; Google Docs at most every 5, and when you leave Io)</label>
-    <div class="btns">
-      <button type="button" id="connectBtn">Sign in to Google</button>
-      <button type="button" id="pushBtn">Save to Google now</button>
-    </div>
+    <h3>Google</h3>
+    <p class="hint"><span id="gWho"></span> Io saves to Google by itself and checks for edits made there. The button by &#8943; shows whether it is up to date.</p>
+    <div class="btns"><button type="button" id="connectBtn">Sign in to Google</button></div>
     <ul class="doc-links" id="docLinks"></ul>
-    <div class="btns"><button type="button" id="reloadBtn" class="plain" hidden title="Replace Io's sheets with the Doc's tabs, to take edits made in Google">Load from Google Doc</button></div>
-    <div id="oldDocs" hidden>
-      <p class="hint" id="oldDocsText"></p>
-      <div class="btns"><button type="button" id="oldDocsBtn" class="plain">Move old Docs to the bin</button></div>
-    </div>
 
     <h3>Backup</h3>
-    <div id="autoBackup">
-      <p class="hint" id="autoText"></p>
-      <div class="btns">
-        <button type="button" id="backupDirBtn">Choose backup folder</button>
-        <button type="button" id="backupNowBtn" hidden>Back up now</button>
-        <button type="button" id="backupStopBtn" class="plain" hidden>Stop</button>
-      </div>
-    </div>
+    <p class="hint" id="autoText"></p>
     <div class="btns">
-      <button type="button" id="backupBtn">Download backup</button>
-      <label class="file-btn">Restore backup<input type="file" id="restoreFile" accept=".json,.gz,application/json,application/gzip" hidden></label>
+      <button type="button" id="restoreBtn">Restore a backup</button>
+      <button type="button" id="backupBtn">Download a copy</button>
     </div>
 
     <h3>Io</h3>
@@ -178,7 +158,6 @@
       <dt>F1 / F2 / F3</dt><dd>Red / green / blue text (press again for the default colour)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
       <dt>Ctrl+Alt+R</dt><dd>Reading mode (Esc goes back to writing; Space / Shift+Space turn the page)</dd>
-      <dt>Ctrl+S</dt><dd>Save to Google Docs</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
       <dt>&#9662; on a sheet tab, or right-click it</dt><dd>Rename or delete the sheet (double-click also renames)</dd>
@@ -201,10 +180,22 @@
   </form>
 </dialog>
 
+<dialog id="backups" class="menu open-dlg">
+  <form method="dialog" class="menu-in">
+    <h2>Restore a backup</h2>
+    <p class="hint">Backups of this book kept on this device, newest first. Restoring replaces the book as it is now.</p>
+    <ol class="toc open-list" id="backupList"></ol>
+    <div class="btns">
+      <label class="file-btn">Restore from a file<input type="file" id="restoreFile" accept=".json,.gz,application/json,application/gzip" hidden></label>
+    </div>
+    <div class="btns end"><button value="close" class="plain">Close</button></div>
+  </form>
+</dialog>
+
 <dialog id="open" class="menu open-dlg">
   <form method="dialog" class="menu-in">
     <h2>Open a Google Doc</h2>
-    <p class="hint">It opens as a new book, one sheet per Doc tab. Edit it here; Ctrl+S saves it back to the same Doc.</p>
+    <p class="hint">It opens as a new book, one sheet per Doc tab. Edit it here; Io saves it back to the same Doc.</p>
     <input id="openQ" class="ask-input" type="search" placeholder="Search by name" spellcheck="false" autocomplete="off" aria-label="Search your Google Docs">
     <ol class="toc open-list" id="openList"></ol>
     <div class="btns end"><button value="close" class="plain">Close</button></div>
