@@ -10,6 +10,7 @@ const SCOPE_DOCS = SCOPE + ' https://www.googleapis.com/auth/documents https://w
 const GDOC = 'application/vnd.google-apps.document';
 const PUSH_EVERY = 120000;
 const DOCS_EVERY = 5 * 60000;
+const PULL_FOR = 10 * 60000; // how long the "up to date with Google" tick stands without a new check
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const DATA_NAME = 'Io data.json.gz';
@@ -810,6 +811,8 @@ const G = {
   exp: 0,
   busy: false,
   fresh: true,
+  freshAt: 0,
+  pulledAt: 0, // when Io last knew it had the Doc's latest (checked it, loaded it or wrote it)
   valid() { return this.token && Date.now() < this.exp - 60000; },
 };
 try {
@@ -1311,6 +1314,7 @@ async function pushDoc(interactive) {
       return 'wait';
     }
   } else if (c?.changed) {
+    G.pulledAt = 0;
     if (!interactive) { book.conflict = true; return; }
     if (!await ask({ title: 'Changed in Google Docs', text: `"${docName()}" was changed in Google Docs since Io last saved it. Overwrite it with Io's version? Google keeps the changed version in its version history. To take the changes instead, use Load from Google in Settings.`, ok: 'Overwrite', danger: true })) return;
   }
@@ -1376,10 +1380,21 @@ async function pushDoc(interactive) {
   book.docSig = after.revisionId === book.revisionId ? await docSig(after) : '?';
   book.pushedAt = Date.now();
   book.conflict = false;
+  G.pulledAt = book.docSig === '?' ? 0 : Date.now();
+}
+
+// Coming back to Io: sync, then load the Doc if it was changed in Google (pullDoc). At most every 15 s.
+function checkDoc() {
+  if (Date.now() - G.freshAt < 15000) return false;
+  G.freshAt = Date.now();
+  G.fresh = true;
+  pushAll(false);
+  return true;
 }
 
 function pushAll(interactive) {
-  if (G.job) return interactive ? G.job.then(() => pushAll(true)) : G.job;
+  // A check of the Doc asked for during a save runs straight after it, not at the next 2-minute round.
+  if (G.job) return G.job.then(() => interactive ? pushAll(true) : G.fresh && pushAll(false));
   G.job = pushNow(interactive).finally(() => { G.job = null; });
   return G.job;
 }
@@ -1398,13 +1413,15 @@ async function pushNow(interactive) {
       setViewOnly(!await canEditDoc(book.docId));
       if (was && !book.viewOnly) return toast(`You can now edit "${docName()}". Use Load from Google (Settings) first to get the latest version.`);
     }
-    if (G.fresh) {
+    let pulled;
+    // Only while Io is on screen: a question about the Doc must not wait unseen and hold up every later save.
+    if (G.fresh && !document.hidden) {
       G.fresh = false;
       if (!book.viewOnly) await syncData(interactive);
-      await pullDoc();
+      pulled = await pullDoc();
     }
     if (book.viewOnly) {
-      if (interactive) toast(`You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
+      if (interactive && pulled !== 'loaded') toast(pulled === 'same' ? 'Io has the latest version from Google Docs.' : `You can only view "${docName()}" in Google Docs, so Io keeps it read-only and does not save it. Load from Google (Settings) gets the latest version.`);
       return;
     }
     await syncData(interactive);
@@ -1418,9 +1435,9 @@ async function pushNow(interactive) {
         const wait = await pushDoc(interactive) === 'wait';
         if (!wait) book.docsAt = Date.now();
         await syncData(interactive);
-        if (interactive && !wait && !book.conflict) toast('Saved to Google.');
+        if (interactive && !wait && !book.conflict && pulled !== 'loaded') toast('Saved to Google.');
       }
-    } else if (interactive) toast('Saved to Google. The Google Doc is up to date.');
+    } else if (interactive && pulled !== 'loaded') toast(pulled === 'same' ? 'Io has the latest version from Google Docs.' : 'Saved to Google. The Google Doc is up to date.');
   } catch (e) {
     G.error = e.message;
     if (interactive) toast('Saving to Google failed: ' + e.message);
@@ -1459,6 +1476,13 @@ function renderSync() {
   el.stSync.textContent = note || lastTxt;
   el.stSync.className = warn && navigator.onLine ? 'st-sync warn' : 'st-sync';
   b.title = [lastTxt || 'Not saved to Google yet', waiting ? waiting + ' sheet(s) waiting' : ''].filter(Boolean).join('. ');
+  // Tick: Io has the Doc's latest (checked on open and on coming back to Io). Otherwise a button to get it.
+  const p = $('#pullBtn');
+  const ok = G.pulledAt && Date.now() - G.pulledAt < PULL_FOR && !G.error && !conflict && G.valid() && navigator.onLine;
+  p.hidden = !book.docId;
+  p.dataset.state = G.busy ? 'busy' : ok ? 'ok' : '';
+  p.title = ok ? `Up to date with Google Docs (checked ${when(G.pulledAt)}). Click to check again.` : 'Get the latest from Google Docs';
+  p.setAttribute('aria-label', p.title);
 }
 
 function renderDocLinks() {
@@ -1627,6 +1651,7 @@ async function loadDoc(keep = [], doc) {
     delete editors[t.id];
   }
   Object.assign(book, { revisionId: doc.revisionId, docSig: await docSig(doc), conflict: false, pushedAt: now });
+  G.pulledAt = now;
   await dbPut([...puts, [bookKey(), book]]);
   await openTab(book.active);
   renderSync();
@@ -1634,19 +1659,26 @@ async function loadDoc(keep = [], doc) {
 }
 
 // First thing on open (and on coming back to Io): if the Doc was changed in Google, load it.
+// Returns 'same' (Io has the latest), 'loaded', or nothing (not checked, or Io's version kept).
 async function pullDoc() {
+  G.pulledAt = 0;
   if (!book.docId || !book.revisionId || book.linked && !hasDocs()) return;
   let doc;
   try { doc = await getDoc(book.docId, 'revisionId'); }
   catch (e) { if (e.status === 404) return; throw e; }
   const c = doc.revisionId !== book.revisionId && await docChanged();
   // Another device's save: its data file brings the Doc's new state, now or at the next sync.
-  if (c?.other) return syncData(false);
+  if (c?.other) {
+    await syncData(false);
+    if (book.revisionId === c.doc.revisionId) { G.pulledAt = Date.now(); return 'same'; }
+    return;
+  }
   if (!c || !c.changed) {
     // Not changed (Google can move the revisionId with no edit): note it, and clear an old warning.
     if (c) Object.assign(book, { revisionId: c.doc.revisionId, docSig: await docSig(c.doc) });
     book.conflict = false;
-    return;
+    G.pulledAt = Date.now();
+    return 'same';
   }
   const mine = book.viewOnly ? [] : book.tabs.filter(t => t.docTab && t.updatedAt > (t.syncedAt || 0));
   if (mine.length && !await ask({
@@ -1656,6 +1688,7 @@ async function pullDoc() {
   })) { book.conflict = true; return; }
   await loadDoc(mine, mine.length ? null : c.doc);
   toast('Loaded the latest from Google Docs.');
+  return 'loaded';
 }
 
 async function reloadFromDoc() {
@@ -2013,6 +2046,7 @@ function wire() {
   $('#autoPush').addEventListener('change', e => pref.set('autoPush', e.target.checked));
   $('#connectBtn').addEventListener('click', () => { signIn().then(() => toast('Signed in to Google.'), e => toast(e.message)); });
   $('#pushBtn').addEventListener('click', () => pushAll(true));
+  $('#pullBtn').addEventListener('click', () => { G.fresh = true; G.freshAt = Date.now(); pushAll(true); });
   $('#updateBtn').addEventListener('click', checkUpdate);
   $('#backupBtn').addEventListener('click', backup);
   $('#backupDirBtn').addEventListener('click', chooseBackupDir);
@@ -2030,8 +2064,10 @@ function wire() {
   }));
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { clearTimeout(timers.book); book.docsAt = 0; dbPut([[bookKey(), book]]).then(flush).then(() => { pushAll(false); autoBackup(); }); }
-    else if (!renewByPage()) { G.fresh = true; pushAll(false); autoBackup(); }
+    else if (!renewByPage()) { if (!checkDoc()) pushAll(false); autoBackup(); }
   });
+  // Coming back from another window (Google Docs side by side) fires focus but not visibilitychange.
+  addEventListener('focus', () => { if (!document.hidden) checkDoc(); });
   addEventListener('pagehide', flush);
   setInterval(() => { if (!document.hidden && pref.get('autoPush', true)) pushAll(false); autoBackup(); }, PUSH_EVERY);
 }

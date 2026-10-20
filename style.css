@@ -405,6 +405,14 @@ button { cursor: pointer; }
 }
 .editor { -webkit-touch-callout: none; }
 
+.pull-btn { display: inline-grid; place-items: center; padding: 4px 6px; color: var(--muted); }
+.pull-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pull-btn .i-ok, .pull-btn[data-state="ok"] .i-pull { display: none; }
+.pull-btn[data-state="ok"] .i-ok { display: block; }
+.pull-btn[data-state="ok"] { color: #2e8540; }
+.pull-btn[data-state="busy"] .i-pull { animation: io-spin 1s linear infinite; }
+@keyframes io-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pull-btn[data-state="busy"] .i-pull { animation: none; } }
 #menuBtn { position: relative; }
 #menuBtn[data-state="pending"]::after, #menuBtn[data-state="warn"]::after {
   content: ""; position: absolute; top: 5px; right: 5px;
