@@ -1061,7 +1061,11 @@ async function mergeData(remote) {
   }
   // A Doc save since the other device wrote its list has already removed those tabs.
   if ((rb.pushedAt || 0) >= (book.pushedAt || 0)) book.dropTabs = [...new Set([...(book.dropTabs || []), ...(rb.dropTabs || [])])];
-  if ((rb.pushedAt || 0) > (book.pushedAt || 0)) Object.assign(book, pick(rb, DOC_KEYS));
+  // Two devices saving the Doc at once: the one whose read-back caught the other's writes has docSig '?', and the
+  // other one's fingerprint is the Doc as it ended. Keep a real fingerprint over '?', whichever save ended last.
+  const real = b => b.docSig && b.docSig !== '?' && b.docId === book.docId;
+  if ((rb.pushedAt || 0) > (book.pushedAt || 0)) Object.assign(book, pick(rb, DOC_KEYS), rb.docSig === '?' && real(book) ? pick(book, ['revisionId', 'docSig']) : {});
+  else if (book.docSig === '?' && real(rb)) Object.assign(book, pick(rb, ['revisionId', 'docSig']));
   for (const r0 of rb.tabs) {
     if (book.deleted[r0.id]) continue;
     const r = pick(r0, SHARED);
@@ -1289,7 +1293,8 @@ async function otherSave() {
   if (book.linked) return false;
   const p = (await gfetch('GET', `${DRIVE}/files/${book.docId}?fields=appProperties&supportsAllDrives=true`)).appProperties || {};
   const [by, at] = (p.ioBusy || '').split(':');
-  return !!by && by !== DEVICE && +at > (book.pushedAt || 0) && Date.now() - +at < BUSY_FOR;
+  // docSig '?': another device wrote during this device's last save, so its mark can be older than that save's end.
+  return !!by && by !== DEVICE && (+at > (book.pushedAt || 0) || book.docSig === '?') && Date.now() - +at < BUSY_FOR;
 }
 const markBusy = () => gfetch('PATCH', `${DRIVE}/files/${book.docId}?fields=id`, { appProperties: { ioBusy: DEVICE + ':' + Date.now() } }).catch(() => {});
 
