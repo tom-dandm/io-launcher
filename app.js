@@ -23,7 +23,7 @@ const el = {
   toc: $('#toc'), fixes: $('#fixes'), fixCount: $('#fixCount'), tabs: $('#tabs'),
   title: $('#title'), tools: $('#tools'), menu: $('#menu'),
   stEdited: $('#stEdited'), stWords: $('#stWords'), stPage: $('#stPage'),
-  zoomVal: $('#zoomVal'), banner: $('#banner'),
+  zoomVal: $('#zoomVal'), banner: $('#banner'), notes: $('#notes'),
 };
 
 const pref = {
@@ -140,6 +140,8 @@ async function openTab(id) {
     el.stage.append(ed);
   }
   for (const k in editors) editors[k].hidden = k !== id;
+  renderNotesMode();
+  refit();
   el.scroller.scrollTop = pref.get('scroll.' + id, 0);
   saveBook();
   renderTabs();
@@ -149,16 +151,19 @@ async function openTab(id) {
 }
 
 function onInput() {
-  const ed = curEd(), t = curTab();
-  normalise(ed);
+  normalise(curEd());
+  changed();
+  later('layout', 250, () => idle(layout));
+  later('meta', 1500, () => idle(meta));
+}
+
+function changed(t = curTab()) {
   t.updatedAt = Date.now();
   typed = true;
   if (t.rev && t.rev === t.baseRev) addPast(t, t.rev);
   t.rev = uid();
   dirty.add(t.id);
   later('save', 800, flush);
-  later('layout', 250, () => idle(layout));
-  later('meta', 1500, () => idle(meta));
   renderEdited();
   renderSync();
 }
@@ -412,13 +417,14 @@ function layout() {
   }
   layoutInfo = { heads, k };
   renderToc();
+  renderNotes();
   onScroll();
 }
 
 let tocKey = '';
 function renderToc() {
   const { heads } = layoutInfo;
-  const key = heads.map(h => h.text).join('\u0002');
+  const key = heads.map(h => h.text + (h.el.dataset.note ? '\u0001' : '')).join('\u0002');
   if (key === tocKey) return;
   tocKey = key;
   const f = document.createDocumentFragment();
@@ -429,6 +435,10 @@ function renderToc() {
     b.dataset.i = i;
     b.innerHTML = '<span class="t"></span>';
     b.firstChild.textContent = h.text;
+    if (h.el.dataset.note) {
+      b.insertAdjacentHTML('beforeend', '<span class="has-note" aria-label="has notes"></span>');
+      b.title = h.el.dataset.note;
+    }
     const all = document.createElement('button');
     all.type = 'button';
     all.className = 'ch-sel';
@@ -540,6 +550,137 @@ function selectChapter(i) {
   s.addRange(r);
 }
 
+// Chapter notes live on the chapter heading (data-note), so they move, sync and back up with it.
+// Google Docs never sees them; loadDoc carries them over (carryNotes).
+const NOTES_W = 240, NOTES_GAP = 24;
+const notesShown = () => !!book && pref.get('notes', true) && curTab()?.kind === 'ms' && !reading() && !phone();
+let noteCards = new Map();
+
+function renderNotesMode() {
+  document.documentElement.classList.toggle('notes-on', notesShown());
+  const b = $('#notesBtn');
+  b.hidden = curTab()?.kind !== 'ms';
+  b.setAttribute('aria-pressed', pref.get('notes', true));
+}
+
+function setNotes(on) {
+  pref.set('notes', on);
+  renderNotesMode();
+  refit();
+  layout();
+}
+
+function setNote(h, text) {
+  if (text.trim()) { h.dataset.note = text; h.dataset.nid ||= uid(); }
+  else { delete h.dataset.note; delete h.dataset.nid; }
+  changed();
+  later('toc', 300, renderToc);
+}
+
+function noteBox(h, label) {
+  const ta = document.createElement('textarea');
+  ta.className = 'note-text';
+  ta.value = h.dataset.note || '';
+  ta.readOnly = !!book.viewOnly;
+  ta.placeholder = 'To mention, foreshadow, fix...';
+  ta.setAttribute('aria-label', 'Notes for ' + label);
+  ta.addEventListener('input', () => { setNote(h, ta.value); later('notes', 30, placeNotes); });
+  return ta;
+}
+
+function noteCard(h) {
+  const c = document.createElement('div'), label = h.textContent.trim() || 'this chapter';
+  c.className = 'note-card';
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'note-add';
+  add.textContent = '+ Note';
+  add.title = 'Add a note to ' + label;
+  const ta = noteBox(h, label);
+  add.addEventListener('click', () => { c.classList.add('open'); ta.focus(); placeNotes(); });
+  ta.addEventListener('blur', () => { c.classList.toggle('open', !!ta.value.trim()); placeNotes(); });
+  c.append(add, ta);
+  return c;
+}
+
+function renderNotes() {
+  const col = el.notes;
+  if (!notesShown()) { if (noteCards.size) { col.replaceChildren(); noteCards = new Map(); } return; }
+  const cards = new Map(), seen = new Set();
+  for (const { el: h } of layoutInfo.heads) {
+    // Splitting a heading copies its note to both halves: the first half keeps it.
+    if (h.dataset.nid && seen.has(h.dataset.nid)) { delete h.dataset.note; delete h.dataset.nid; changed(); }
+    seen.add(h.dataset.nid);
+    cards.set(h, noteCards.get(h) || noteCard(h));
+  }
+  const list = [...cards.values()];
+  if (list.length !== col.children.length || list.some((c, i) => col.children[i] !== c)) col.replaceChildren(...list);
+  noteCards = cards;
+  for (const [h, c] of cards) {
+    const ta = c.lastChild, note = h.dataset.note || '';
+    if (ta !== document.activeElement && ta.value !== note) ta.value = note;
+    if (ta !== document.activeElement) c.classList.toggle('open', !!note);
+  }
+  placeNotes();
+}
+
+// Each card starts level with its chapter heading, or below the card before it.
+function placeNotes() {
+  const { heads, k } = layoutInfo;
+  let y = 0;
+  for (const h of heads) {
+    const c = noteCards.get(h.el);
+    if (!c) continue;
+    const top = Math.max(h.y, y);
+    if (c.style.top !== top + 'px') c.style.top = top + 'px';
+    y = top + c.getBoundingClientRect().height / (k || 1) + 12;
+  }
+}
+
+// The phone has no room beside the page: its chapter notes open in a dialog.
+function openNotes() {
+  const list = $('#notesList'), { heads } = layoutInfo, f = document.createDocumentFragment();
+  heads.forEach((h, i) => {
+    const li = document.createElement('li'), go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'note-go';
+    go.textContent = h.text;
+    go.title = 'Go to this chapter';
+    go.addEventListener('click', () => { $('#notesDlg').close(); goTo(h.el, false); });
+    li.append(go, noteBox(h.el, h.text));
+    if (i === activeHead) li.className = 'on';
+    f.append(li);
+  });
+  if (!heads.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'Use Chapter style for headings, then each chapter gets its own notes.';
+    f.append(li);
+  }
+  list.replaceChildren(f);
+  $('#notesDlg').showModal();
+  list.querySelector('.on')?.scrollIntoView({ block: 'start' });
+}
+
+// Google Docs has no chapter notes: keep Io's on the matching chapters (same heading, else same place).
+function carryNotes(from, to) {
+  const a = document.createElement('template'), b = document.createElement('template');
+  a.innerHTML = from;
+  const old = [...a.content.children].filter(n => n.nodeName === 'H1' && n.dataset.note);
+  if (!old.length) return to;
+  b.innerHTML = to;
+  const all = [...a.content.children].filter(n => n.nodeName === 'H1');
+  const heads = [...b.content.children].filter(n => n.nodeName === 'H1');
+  const key = n => n.textContent.trim().toLowerCase(), used = new Set(), give = (n, o) => {
+    used.add(o);
+    n.dataset.note = o.dataset.note;
+    n.dataset.nid = o.dataset.nid || uid();
+  };
+  for (const n of heads) { const o = old.find(o => !used.has(o) && key(o) === key(n)); if (o) give(n, o); }
+  if (all.length === heads.length) heads.forEach((n, i) => { if (!n.dataset.note && old.includes(all[i]) && !used.has(all[i])) give(n, all[i]); });
+  return b.innerHTML;
+}
+
 const reading = () => document.documentElement.classList.contains('reading');
 const READ_THEME = { light: '#fbfaf7', sepia: '#f4ecd8', dark: '#111110' };
 
@@ -567,6 +708,8 @@ function setReading(on) {
     }
     el.shell.classList.toggle('nav-hidden', on || pref.get('navHidden', false));
     el.shell.classList.remove('nav-open');
+    renderNotesMode();
+    refit();
     setReadTheme(pref.get('readTheme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   });
   if (!book.viewOnly) pref.set('reading', on);
@@ -670,8 +813,12 @@ function stepZoom(dir) {
   setZoom(next ?? ZOOMS[i] ?? zoom);
 }
 function fitZoom() {
-  const w = el.scroller.clientWidth - 32;
-  return w < PAGE_W ? Math.max(.3, w / PAGE_W) : 1;
+  const w = el.scroller.clientWidth - 32, need = PAGE_W + (notesShown() ? NOTES_GAP + NOTES_W : 0);
+  return w < need ? Math.max(.3, w / need) : 1;
+}
+function refit() {
+  const z = startZoom();
+  if (Math.abs(z - zoom) > .005) setZoom(z, true, false);
 }
 function startZoom() {
   const z = pref.get('zoom', null), fit = fitZoom();
@@ -1608,7 +1755,7 @@ async function loadDoc(keep = [], doc) {
     if (!t) { t = { id: uid(), kind: 'notes', fixes: 0, docTab: s.tabId }; book.tabs.push(t); }
     addPast(t, t.rev, t.baseRev);
     Object.assign(t, { name: s.title.slice(0, 60), tabTitle: s.title.slice(0, 60), nameAt: now, rev: uid(), updatedAt: now, syncedAt: now, pushedAt: now });
-    puts.push(['tab:' + t.id, s.html]);
+    puts.push(['tab:' + t.id, carryNotes(await tabHtml(t), s.html)]);
     editors[t.id]?.remove();
     delete editors[t.id];
   }
@@ -1879,7 +2026,7 @@ function wire() {
     const b = e.target.closest('button');
     if (!b) return;
     hidePops();
-    ({ mRead: () => setReading(!reading()), mBooks: openBooks, mSpell: () => setSpell(!pref.get('spell', false)), mSettings: openMenu })[b.id]?.();
+    ({ mRead: () => setReading(!reading()), mNotes: openNotes, mBooks: openBooks, mSpell: () => setSpell(!pref.get('spell', false)), mSettings: openMenu })[b.id]?.();
   });
 
   el.toc.addEventListener('click', e => {
@@ -1919,6 +2066,7 @@ function wire() {
   for (const b of document.querySelectorAll('button[data-read]')) b.addEventListener('click', () => { pref.set('readTheme', b.dataset.read); setReadTheme(b.dataset.read); });
   document.addEventListener('keydown', e => {
     if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === 'KeyR') { e.preventDefault(); setReading(!reading()); }
+    else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === 'KeyN' && curTab().kind === 'ms') { e.preventDefault(); phone() || reading() ? openNotes() : setNotes(!pref.get('notes', true)); }
     else if (e.key === 'Escape' && !rpop.hidden) showRead(false);
     else if (e.key === 'Escape' && reading() && $('#colorPop').hidden && !document.querySelector('dialog[open]')) setReading(false);
   });
@@ -1979,9 +2127,11 @@ function wire() {
     if (!phone()) return openMenu();
     if (!more.hidden) return hidePops();
     $('#mRead').textContent = reading() ? 'Back to writing' : 'Read';
+    $('#mNotes').hidden = curTab().kind !== 'ms';
     showPop(more, e.currentTarget);
   });
   $('#spellBtn').addEventListener('click', () => setSpell(!pref.get('spell', false)));
+  $('#notesBtn').addEventListener('click', () => setNotes(!pref.get('notes', true)));
   const pop = $('#colorPop'), cbtn = $('#colorBtn');
   const showColors = on => {
     pop.hidden = !on;
@@ -2011,8 +2161,8 @@ function wire() {
   addEventListener('online', () => { renderSync(); pushAll(false); });
   addEventListener('offline', renderSync);
   addEventListener('resize', () => later('layout', 200, () => {
-    const z = startZoom();
-    if (Math.abs(z - zoom) > .005 && (pref.get('zoom', null) === null || z < zoom)) setZoom(z, true, false);
+    renderNotesMode();
+    refit();
     layout();
   }));
   document.addEventListener('visibilitychange', () => {

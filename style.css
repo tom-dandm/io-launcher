@@ -26,6 +26,11 @@
   --zoom: 1;
   --side-w: 240px;
   --gutter: 16px;
+  --notes-w: 240px;
+  --notes-gap: 24px;
+  --note-bg: #fff8d9;
+  --note-line: #eadb9f;
+  --note-ink: #3b3218;
   color-scheme: light;
 }
 
@@ -41,10 +46,16 @@
     --accent: #6c9ce0;
     --accent-ink: #111;
     --page-shadow: 0 1px 3px rgb(0 0 0 / .6);
+    --note-bg: #2e2a1d;
+    --note-line: #4a4330;
+    --note-ink: #ece3c4;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
+  --note-bg: #2e2a1d;
+  --note-line: #4a4330;
+  --note-ink: #ece3c4;
   --bg: #1b1a19;
   --chrome: #252423;
   --chrome-ink: #f3f2f1;
@@ -239,6 +250,48 @@ button { cursor: pointer; }
 .editor font.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 .editor::selection, .editor ::selection { background: #b4d3ff; }
 
+/* Chapter notes: a column beside the page, each card level with its chapter heading. */
+.notes { display: none; }
+.notes-on .stage { width: calc(var(--page-w) + var(--notes-gap) + var(--notes-w)); }
+.notes-on .editor { width: var(--page-w); }
+.notes-on .notes { display: block; position: absolute; top: 0; left: calc(var(--page-w) + var(--notes-gap)); width: var(--notes-w); }
+.note-card { position: absolute; left: 0; right: 0; }
+.note-add {
+  padding: 3px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  opacity: .7;
+}
+.note-add:hover, .note-add:focus-visible { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.note-card .note-text { display: none; }
+.note-card.open .note-add { display: none; }
+.note-card.open .note-text { display: block; }
+.note-text {
+  width: 100%;
+  min-height: 4.5em;
+  padding: 8px 10px;
+  border: 1px solid var(--note-line);
+  border-radius: 6px;
+  background: var(--note-bg);
+  color: var(--note-ink);
+  font: 13px/1.45 var(--ui-font);
+  resize: none;
+  field-sizing: content;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .08);
+}
+.note-text:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.note-text::placeholder { color: var(--muted); }
+.toc .has-note { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; background: #d9b23c; }
+.note-list { list-style: none; margin: 10px 0 0; padding: 0 6px 0 0; max-height: min(520px, 62dvh); overflow-y: auto; }
+.note-list li { margin-bottom: 14px; }
+.note-list .note-go { display: block; width: 100%; margin-bottom: 4px; padding: 4px 0; border: 0; background: none; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-list .on .note-go { color: var(--accent); }
+.note-list .note-text { min-height: 5.5em; font-size: 15px; }
+.note-list .empty { color: var(--muted); font-size: 13px; }
+
 .foot {
   display: flex;
   align-items: center;
@@ -391,7 +444,8 @@ button { cursor: pointer; }
   .bar { gap: 4px; }
   .title { flex: 1 1 0; min-width: 60px; }
   .tools, #readBtn, #booksBtn, .zoom, .status { display: none; }
-  .stage { zoom: 1; width: auto; margin: 0; }
+  .stage, .notes-on .stage { zoom: 1; width: auto; margin: 0; }
+  .notes-on .editor { width: auto; }
   .scroller { background: var(--page); }
   .editor { padding: 20px var(--gutter) 40vh; box-shadow: none; }
   .foot { flex-wrap: wrap; }
@@ -553,9 +607,10 @@ button { cursor: pointer; }
 @media print {
   @page { size: A4; margin: 2.54cm; @bottom-center { content: counter(page); font: 10pt Aptos, Calibri, sans-serif; } }
   body { display: block; height: auto; overflow: visible; background: #fff; }
-  .bar, .side, .foot, .banner { display: none !important; }
+  .bar, .side, .foot, .banner, .notes { display: none !important; }
   .shell, .scroller { display: block; overflow: visible; }
-  .stage { zoom: 1; width: auto; margin: 0; }
+  .stage, .notes-on .stage { zoom: 1; width: auto; margin: 0; }
+  .notes-on .editor { width: auto; }
   .editor { padding: 0; min-height: 0 !important; background: none; box-shadow: none; }
   .editor[hidden] { display: none; }
   .editor > * { orphans: 2; widows: 2; }

@@ -33,6 +33,7 @@
     <button type="button" data-cmd="clear" title="Clear marks and colour from the selection (Ctrl+\)">Clear</button>
     <span class="sep" aria-hidden="true"></span>
     <button type="button" id="spellBtn" title="Show spelling mistakes" aria-pressed="false">Spelling</button>
+    <button type="button" id="notesBtn" title="Chapter notes beside the page (Ctrl+Alt+N)" aria-pressed="true">Notes</button>
   </div>
   <div class="bar-end">
     <div class="read-ctl" role="group" aria-label="Reading">
@@ -55,7 +56,7 @@
     <ol class="toc fixes" id="fixes"></ol>
   </nav>
   <main class="scroller" id="scroller">
-    <div class="stage" id="stage"></div>
+    <div class="stage" id="stage"><div class="notes" id="notes" role="group" aria-label="Chapter notes"></div></div>
   </main>
 </div>
 
@@ -121,6 +122,7 @@
 
 <div class="pop-menu" id="morePop" role="menu" aria-label="Menu" hidden>
   <button type="button" role="menuitem" id="mRead">Read</button>
+  <button type="button" role="menuitem" id="mNotes">Chapter notes</button>
   <button type="button" role="menuitem" id="mBooks">Books</button>
   <button type="button" role="menuitem" id="mSpell" aria-pressed="false">Spelling</button>
   <button type="button" role="menuitem" id="mSettings">Settings</button>
@@ -158,6 +160,7 @@
       <dt>F1 / F2 / F3</dt><dd>Red / green / blue text (press again for the default colour)</dd>
       <dt>Ctrl+\</dt><dd>Clear marks and colour</dd>
       <dt>Ctrl+Alt+R</dt><dd>Reading mode (Esc goes back to writing; Space / Shift+Space turn the page)</dd>
+      <dt>Ctrl+Alt+N</dt><dd>Show or hide chapter notes beside the page</dd>
       <dt>Ctrl+O</dt><dd>Open a Google Doc</dd>
       <dt>Ctrl+= / Ctrl+- / Ctrl+wheel</dt><dd>Zoom</dd>
       <dt>&#9662; on a sheet tab, or right-click it</dt><dd>Rename or delete the sheet (double-click also renames)</dd>
@@ -199,6 +202,15 @@
     <input id="openQ" class="ask-input" type="search" placeholder="Search by name" spellcheck="false" autocomplete="off" aria-label="Search your Google Docs">
     <ol class="toc open-list" id="openList"></ol>
     <div class="btns end"><button value="close" class="plain">Close</button></div>
+  </form>
+</dialog>
+
+<dialog id="notesDlg" class="menu open-dlg">
+  <form method="dialog" class="menu-in">
+    <h2>Chapter notes</h2>
+    <p class="hint">Reminders for each chapter: what to mention, foreshadow or fix. They stay in Io and are not added to the Google Doc.</p>
+    <ol class="note-list" id="notesList"></ol>
+    <div class="btns end"><button value="close">Done</button></div>
   </form>
 </dialog>
 
